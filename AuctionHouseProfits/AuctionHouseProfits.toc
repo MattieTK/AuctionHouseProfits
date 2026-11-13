@@ -3,6 +3,7 @@
 ## Notes: Vendor-to-auction profit calculator with a Profits tab in the auction house: reputation discounts, deposits, faction vs neutral cut and break-even prices.
 ## Author: tk.gg
 ## Version: 0.1.0
+## X-Curse-Project-ID: 1801565
 ## SavedVariables: AuctionHouseProfitsDB, AuctionHouseProfitsData
 ## OptionalDeps: Auctionator, TradeSkillMaster, Auc-Advanced
 ## IconTexture: Interface\Icons\INV_Misc_Coin_02

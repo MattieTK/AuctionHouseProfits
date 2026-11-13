@@ -14,6 +14,7 @@ player-facing description.
 | `tests/runtime_test.lua` | Loads the whole add-on against a WoW mock and drives merchant, window, AH tab and price-check flows. |
 | `tests/snd_wow.lua` | WoW boundary mock from SomethingNeedDoing v0.5.2, extended in `runtime_test.lua`. |
 | `tools/check.sh` | Syntax check, tests, then package. |
+| `media/logo.png` | CurseForge project logo (source: `media/logo.svg.html`). |
 | `tools/package.py` | Verifies versions and pinned hashes, builds `dist/AuctionHouseProfits-<version>.zip`. |
 
 ## Develop
@@ -42,8 +43,9 @@ Releases are automatic from an annotated tag on `main`:
    the same zip to CurseForge for WoW Forever 1.60.1. `vX.Y.Z-alpha.N` and `-beta.N` tags upload as
    alpha and beta files.
 
-CurseForge needs two things: `## X-Curse-Project-ID` in the TOC and a `CF_API_TOKEN` repository
-secret (create one at https://authors.curseforge.com/#/api-tokens). If either is missing, the
+CurseForge project: [Auction House Profits (1801565)](https://authors.curseforge.com/#/projects/1801565/files).
+Uploads need `## X-Curse-Project-ID` in the TOC and the `CF_API_TOKEN` repository secret
+(CurseForge → Author Settings → API Tokens). If either is missing, the
 GitHub Release still publishes and the workflow warns that CurseForge was skipped. After fixing
 it, re-run **Release addon** with the same tag.
 
