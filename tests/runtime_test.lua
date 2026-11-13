@@ -92,7 +92,7 @@ function UnitReaction() return 6 end
 function UnitName(u) if u == "npc" then return "Tamar" end end
 function GetRealZoneText() return "Orgrimmar" end
 
-local BAG = { [1] = { itemID = 14047 } }
+local BAG = { [1] = { itemID = 14047, stackCount = 20 }, [2] = { itemID = 14047, stackCount = 15 } }
 C_Container = {
     GetContainerNumSlots = function(bag) return bag == 0 and 4 or 0 end,
     GetContainerItemInfo = function(bag, slot) return bag == 0 and BAG[slot] or nil end,
@@ -100,9 +100,26 @@ C_Container = {
 local loaded = {}
 C_AddOns = { IsAddOnLoaded = function(name) return loaded[name] == true end }
 
-local searches = {}
-local commodity = { [14047] = { { unitPrice = 2100, quantity = 40 } } }
-Enum = { AuctionHouseSortOrder = { Price = 0 } }
+local cvars = { auctionHouseDurationDropdown = "1" }
+function GetCVar(key) return cvars[key] end
+local wallet = 100000
+function GetMoney() return wallet end
+function BuyMerchantItem() end
+function IsShiftKeyDown() return false end
+StaticPopupDialogs = {}
+local popups = {}
+function StaticPopup_Show(name) popups[#popups + 1] = "show:" .. name end
+function StaticPopup_Hide(name) popups[#popups + 1] = "hide:" .. name end
+ItemLocation = { CreateFromBagAndSlot = function(_, bag, slot) return { bag = bag, slot = slot } end }
+C_Map = { GetBestMapForUnit = function() return 1454 end } -- Orgrimmar: faction AH
+
+local searches, posts, owned = {}, {}, {}
+local commodity = { [14047] = {
+    { unitPrice = 2100, quantity = 40, numOwnerItems = 0, totalNumberOfOwners = 1, owners = { "Bob" } },
+    { unitPrice = 2300, quantity = 10, numOwnerItems = 10, totalNumberOfOwners = 1, owners = {} },
+} }
+Enum = { AuctionHouseSortOrder = { Price = 0 }, ItemCommodityStatus = { Unknown = 0, Item = 1, Commodity = 2 },
+    AuctionStatus = { Active = 0, Sold = 1 } }
 C_AuctionHouse = {
     MakeItemKey = function(id) return { itemID = id, itemLevel = 0, itemSuffix = 0, battlePetSpeciesID = 0 } end,
     SendSearchQuery = function(key) searches[#searches + 1] = key.itemID end,
@@ -113,6 +130,17 @@ C_AuctionHouse = {
     GetNumItemSearchResults = function() return 0 end,
     CalculateCommodityDeposit = function(id, duration, qty) return 1234 end,
     SupportsCopperValues = function() return true end,
+    IsSellItemValid = function() return true end,
+    GetItemCommodityStatus = function() return Enum.ItemCommodityStatus.Commodity end,
+    PostCommodity = function(loc, duration, qty, price)
+        posts[#posts + 1] = { loc = loc, duration = duration, qty = qty, price = price }; return true
+    end,
+    ConfirmPostCommodity = function(loc, duration, qty, price)
+        posts[#posts + 1] = { confirm = true, loc = loc, duration = duration, qty = qty, price = price }
+    end,
+    GetNumOwnedAuctions = function() return #owned end,
+    GetOwnedAuctionInfo = function(i) return owned[i] end,
+    GetItemKeyInfo = function() return { isCommodity = true } end,
 }
 
 ChatFrameUtil = { InsertLink = function() return false end }
@@ -140,11 +168,16 @@ local function test(name, fn)
 end
 local function settle() for _ = 1, 5 do W.tick(0.1) end end
 
-test("addon becomes ready and creates its data store", function()
+-- v0.1 saved "Your price" as a manual market price.
+AuctionHouseProfitsData = { version = 1, items = {}, scans = {}, manual = { [3371] = 20 }, plans = {}, calibration = {} }
+
+test("addon becomes ready and migrates v1 data", function()
     W.event("ADDON_LOADED", ADDON)
     settle()
     assert(ns.App:IsReady())
-    assert(type(AuctionHouseProfitsData) == "table" and AuctionHouseProfitsData.version == 1)
+    local db = AuctionHouseProfitsData
+    assert(db.version == 2 and type(db.purchases) == "table" and type(db.sales) == "table")
+    assert(db.plans[3371].price == 20 and next(db.manual) == nil, "manual price moved to your price")
     assert(#W.errors == 0, W.errors[1])
 end)
 
@@ -169,11 +202,29 @@ test("merchant visit records prices, standing and calibration", function()
     assert(again == 3, "revisiting a merchant doesn't add duplicate samples")
 end)
 
+test("buying from a merchant records what you paid, once the money leaves", function()
+    BuyMerchantItem(1, 5) -- 5 Coarse Thread at 7c
+    wallet = wallet - 35
+    W.event("PLAYER_MONEY"); settle()
+    assert(ns.Data:PaidUnit(2320) == 7, "paid 7c each")
+    BuyMerchantItem(3) -- Runecloth, but the purchase fails: no money moves
+    W.event("PLAYER_MONEY"); settle()
+    assert(ns.Data:PaidUnit(14047) == nil)
+end)
+
+test("reputation defaults step up by standing", function()
+    local rules = ns.Rules(ns.App)
+    assert(rules.discounts[5] == 5 and rules.discounts[6] == 10 and rules.discounts[7] == 15 and rules.discounts[8] == 20)
+end)
+
 test("analysis prices an item from vendor cost and Auctionator", function()
     local a = ns.Analysis.Item(ns.App, 2320, os.time())
     assert(math.abs(a.baseUnit - 7 / 0.9) < 1e-9, "list price recovered from honored price")
     assert(a.standing == 6 and math.abs(a.unitCost - 7) < 1e-9)
     assert(a.market and a.market.source == "auctionator" and a.market.price == 25)
+    assert(a.price == 25 and a.priceKind == "market", "no listings seen: price at market")
+    assert(a.duration == 1, "duration from the AH Sell page's own setting")
+    assert(a.paidUnit == 7)
     assert(a.faction and a.neutral and a.ladder and #a.byStanding == 5)
     assert(a.byStanding[1].unitCost > a.byStanding[3].unitCost, "neutral standing pays more")
     assert(not a.gameDepositVenue, "AH closed: formula deposit")
@@ -199,27 +250,45 @@ test("slash command opens the standalone window with a populated list", function
     assert(#W.errors == 0, W.errors[1])
 end)
 
-test("editing the plan and manual price republishes", function()
+test("editing the plan and your price republishes", function()
     local box = ns.UI.inputs.stackSize
     box:SetText("10")
     box:GetScript("OnEnterPressed")(box)
     settle()
     assert(ns.UI.current.stackSize == 10)
-    local manual = ns.UI.inputs.manual
-    manual:SetText("30c")
-    manual:GetScript("OnEnterPressed")(manual)
+    local boxes = ns.UI.inputs.price.boxes
+    boxes[3]:SetText("30")
+    boxes[3]:GetScript("OnEnterPressed")(boxes[3])
     settle()
-    assert(ns.UI.current.market.source == "manual" and ns.UI.current.market.price == 30)
-    -- ladder click sets the manual price
+    local a = ns.UI.current
+    assert(a.price == 30 and a.priceKind == "yours")
+    assert(a.market.source == "auctionator" and a.market.price == 25, "your price never replaces the market price")
+    -- 1g 2s 3c across three boxes
+    boxes[1]:SetText("1"); boxes[2]:SetText("2"); boxes[3]:SetText("3")
+    boxes[1]:GetScript("OnEnterPressed")(boxes[1]); settle()
+    assert(ns.UI.current.price == 10203)
+    assert(boxes[1]:GetText() == "1" and boxes[2]:GetText() == "2" and boxes[3]:GetText() == "3")
+    boxes[1]:SetText(""); boxes[2]:SetText(""); boxes[3]:SetText("30")
+    boxes[3]:GetScript("OnEnterPressed")(boxes[3]); settle()
+    -- ladder click sets your price
     local first = ns.UI.ladder[1].button
     local clicked = first.price -- the ladder re-centres on the new price after the click
     first:GetScript("OnClick")(first)
     settle()
-    assert(ns.Data:Manual(2320) == clicked and clicked == 45)
-    manual:SetText("")
-    manual:GetScript("OnEnterPressed")(manual)
+    assert(ns.Data:Plan(2320).price == clicked and clicked == 45)
+    -- clearing all three boxes goes back to the default price
+    for _, b in ipairs(boxes) do b:SetText("") end
+    boxes[1]:GetScript("OnEnterPressed")(boxes[1])
     settle()
-    assert(ns.Data:Manual(2320) == nil and ns.UI.current.market.source == "auctionator")
+    assert(ns.Data:Plan(2320).price == nil and ns.UI.current.priceKind == "market")
+    assert(boxes[3]:GetText() == "25", "boxes show the default again")
+end)
+
+test("closed dropdowns show their value", function()
+    assert(ns.UI.inputs.duration.Text:GetText() == "8 Hours")
+    assert(ns.UI.inputs.standing.Text:GetText() == "Honored")
+    assert(ns.UI.filterDropdown.Text:GetText() == "Vendor items")
+    assert(ns.UI.inputs.duration.Text.font, "caption has a font")
 end)
 
 test("filters and search", function()
@@ -250,6 +319,16 @@ test("auction house tab attaches when Blizzard_AuctionHouseUI loads", function()
         for i, m in ipairs(order) do if m == mode then self.selectedTab = i; PanelTemplates_SelectTab(self.Tabs[i]) end end
     end
     ah:SetScript("OnShow", function(self) self:SetDisplayMode(AuctionHouseFrameDisplayMode.Buy) end)
+    function ah:SetTitle(t) self.title = t end
+    -- Blizzard's Auctions page: an item header shows when you pick one of your items.
+    local af = CreateFrame("Frame", nil, ah)
+    af.ItemDisplay = CreateFrame("Button", nil, af)
+    function af:GetItemKey() return self.itemKey end
+    function af:SetItemKey(key) self.itemKey = key end
+    function af:SetDisplayMode(mode) self.mode = mode end
+    function af:SetTab(tab) self.tab = tab end
+    function af:IsDisplayingBids() return false end
+    ah.AuctionsFrame = af
     ah:Hide()
     loaded.Blizzard_AuctionHouseUI = true
     W.event("ADDON_LOADED", "Blizzard_AuctionHouseUI")
@@ -257,6 +336,7 @@ test("auction house tab attaches when Blizzard_AuctionHouseUI loads", function()
     assert(ns.AuctionTab.attached and AuctionHouseProfitsAHTab)
     assert(#ah.Tabs == 3, "Blizzard Tabs array untouched")
     assert(AuctionHouseProfitsAHTab:GetParent() ~= ah, "tab lives in our holder")
+    assert(ns.AuctionsBar.attached and ns.AuctionsBar.bar, "Auctions tab strip attached")
 end)
 
 test("opening the AH and clicking Profits shows the view in the AH", function()
@@ -270,6 +350,7 @@ test("opening the AH and clicking Profits shows the view in the AH", function()
     assert(AuctionHouseProfitsAHTab.selectedTab == true and ah.Tabs[1].selectedTab == false)
     assert(type(ah.displayMode) == "table" and #ah.displayMode == 0, "Blizzard subframes hidden via an empty display mode")
     assert(not ns.UI.window:IsShown(), "standalone window closed when docked")
+    assert(ah.title == "Auction House Profits")
 end)
 
 test("selecting an item auto-scans the AH and uses the game deposit", function()
@@ -280,10 +361,66 @@ test("selecting an item auto-scans the AH and uses the game deposit", function()
     settle()
     local scan = ns.Data:Scan(14047)
     assert(scan and scan.price == 2100 and scan.qty == 40)
+    assert(scan.levels and #scan.levels == 2 and scan.levels[2].mine == 10)
     local a = ns.UI.current
     assert(a.market.source == "scan" and a.market.price == 2100)
     assert(a.gameDepositVenue and a.deposit[a.gameDepositVenue] == 1234)
     assert(ns.UI.scanButton.label:GetText() == "Scan AH")
+    assert(a.undercut == 2099 and a.price == 2099 and a.priceKind == "undercut", "defaults to 1c under Bob")
+    assert(a.ahead == 0 and a.positions[1].price == 2099 and a.positions[1].ahead == 0)
+    assert(#a.positions == 1, "your own 23s listing isn't something to undercut")
+    assert(ns.UI.tableHeads[1]:GetText() == "List at", "live market table shown once listings are known")
+    local boxes = ns.UI.inputs.price.boxes
+    assert(boxes[1]:GetText() == "" and boxes[2]:GetText() == "20" and boxes[3]:GetText() == "99")
+    -- Clicking into the price and away again doesn't pin the automatic price.
+    boxes[2]:SetFocus(); boxes[2]:ClearFocus(); boxes[2]:GetScript("OnEditFocusLost")(boxes[2]); settle()
+    assert(ns.Data:Plan(14047).price == nil and ns.UI.current.priceKind == "undercut")
+    -- Escape throws away what you typed.
+    boxes[3]:SetText("12"); boxes[3]:SetFocus()
+    local esc = boxes[3]:GetScript("OnEscapePressed")
+    local lost = boxes[3]:GetScript("OnEditFocusLost")
+    local clear = boxes[3].ClearFocus
+    boxes[3].ClearFocus = function(self) clear(self); lost(self) end -- native ClearFocus fires focus-lost
+    esc(boxes[3]); settle()
+    boxes[3].ClearFocus = nil
+    assert(ns.Data:Plan(14047).price == nil and boxes[3]:GetText() == "99")
+end)
+
+test("a search that finds nothing clears stale sellers", function()
+    commodity[3371] = {}
+    ns.Data:RecordScan(3371, 30, 5, os.time(), { { price = 30, qty = 5, mine = 0 } })
+    assert(ns.Prices:Scan(3371))
+    W.event("COMMODITY_SEARCH_RESULTS_UPDATED", 3371); settle()
+    local scan = ns.Data:Scan(3371)
+    assert(#scan.levels == 0 and scan.qty == 0 and not ns.Prices:IsScanning(3371))
+end)
+
+test("other addons' searches refresh the market depth too", function()
+    commodity[14047][1].quantity = 41
+    W.event("COMMODITY_SEARCH_RESULTS_UPDATED", 14047) -- nobody asked us
+    settle()
+    assert(ns.Data:Scan(14047).levels[1].qty == 41)
+    commodity[14047][1].quantity = 40
+    W.event("COMMODITY_SEARCH_RESULTS_UPDATED", 14047); settle()
+end)
+
+test("Post lists a stack from your bags at your price", function()
+    local before = #posts
+    ns.UI.postButton:GetScript("OnClick")(ns.UI.postButton)
+    settle()
+    local p = posts[before + 1]
+    assert(p and p.qty == 20 and p.price == 2099 and p.duration == 1 and p.loc.bag == 0 and p.loc.slot == 1)
+    assert(ns.Post:IsBusy() and ns.UI.postButton.label:GetText() == "Posting...")
+    -- The game asks for confirmation: our popup replaces Blizzard's.
+    W.event("AUCTION_HOUSE_POST_WARNING"); settle()
+    assert(popups[#popups - 1] == "hide:AUCTION_HOUSE_POST_WARNING" and popups[#popups] == "show:AUCTIONHOUSEPROFITS_POST_WARNING")
+    StaticPopupDialogs.AUCTIONHOUSEPROFITS_POST_WARNING.OnAccept()
+    local c = posts[before + 2]
+    assert(c and c.confirm and c.qty == 20 and c.price == 2099)
+    local scans = #searches
+    W.event("AUCTION_HOUSE_AUCTION_CREATED"); settle(); settle()
+    assert(not ns.Post:IsBusy())
+    assert(#searches == scans + 1 and searches[#searches] == 14047, "re-reads listings after posting")
 end)
 
 test("clicking a Blizzard tab or changing display mode closes the Profits view", function()
@@ -297,6 +434,40 @@ test("clicking a Blizzard tab or changing display mode closes the Profits view",
     assert(ns.UI:IsShown())
     ah:SetDisplayMode(AuctionHouseFrameDisplayMode.Auctions); settle()
     assert(not ns.UI:IsShown(), "closed by SetDisplayMode hook")
+end)
+
+test("Auctions tab strip: relist, undercut/match and what your auctions made", function()
+    local af, B = ah.AuctionsFrame, ns.AuctionsBar
+    ah:SetDisplayMode(AuctionHouseFrameDisplayMode.Auctions); settle()
+    af:SetItemKey({ itemID = 14047 }); settle()
+    assert(B.bar:IsShown() and B.itemID == 14047)
+    assert(B.qtyBox:GetText() == "20")
+    assert(B.money.boxes[2]:GetText() == "20" and B.money.boxes[3]:GetText() == "99", "undercut by default")
+    assert(B.quote:GetText():find("first in line"))
+    B:UsePrice("match"); settle()
+    assert(B.money.boxes[3]:GetText() == "0" and B.money.boxes[2]:GetText() == "21")
+    assert(B.quote:GetText():find("40 ahead"))
+    -- 13 sold for 21s each, 7 still listed
+    owned[1] = { auctionID = 501, itemKey = { itemID = 14047 }, status = 1, quantity = 13, buyoutAmount = 13 * 2100 }
+    owned[2] = { auctionID = 502, itemKey = { itemID = 14047 }, status = 0, quantity = 7, buyoutAmount = 2100 }
+    W.event("OWNED_AUCTIONS_UPDATED"); settle()
+    local o = ns.Post:Owned(14047)
+    assert(o.sold == 13 and o.listed == 7 and o.prices[1].price == 2100)
+    local sale = AuctionHouseProfitsData.sales[501]
+    assert(sale and sale.qty == 13 and sale.gross == 27300 and sale.unitCost == 1440 and sale.cutRate == 0.05)
+    W.event("OWNED_AUCTIONS_UPDATED"); settle()
+    local n = 0; for _ in pairs(AuctionHouseProfitsData.sales) do n = n + 1 end
+    assert(n == 1, "each sale recorded once")
+    -- 27300 - 1365 cut - 13 x 1440 = 7215
+    assert(B.owned:GetText():find("13 sold") and B.owned:GetText():find("7 listed"), B.owned:GetText())
+    assert(B.owned:GetText():find("C7215"), "profit on sold auctions: " .. B.owned:GetText())
+    -- Relist another 20 at the matched price
+    local before = #posts
+    B.postButton:GetScript("OnClick")(B.postButton); settle()
+    assert(posts[before + 1].qty == 20 and posts[before + 1].price == 2100)
+    W.event("AUCTION_HOUSE_AUCTION_CREATED"); settle()
+    af:SetItemKey(nil); settle()
+    assert(not B.bar:IsShown(), "hidden on All Auctions")
 end)
 
 test("/ahp while docked moves the view to the window and gives the AH back", function()

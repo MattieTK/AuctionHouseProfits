@@ -19,12 +19,47 @@ local function blizzardTabs()
     return type(ah) == "table" and type(ah.Tabs) == "table" and ah.Tabs or {}
 end
 
-function T:Reanchor()
+-- The right-most tab under the AH frame, whoever added it. Auctionator and
+-- others add their own tabs after Blizzard's, so "last Blizzard tab" isn't
+-- enough: we'd sit on top of theirs. Tabs are buttons hanging below the
+-- frame's bottom edge.
+function T:LastTab()
+    local ah = AuctionHouseFrame
     local tabs = blizzardTabs()
-    local last = tabs[#tabs]
+    local best, bestRight = tabs[#tabs], nil
+    local bottom = ah and ah.GetBottom and ah:GetBottom()
+    if not bottom then return best end
+    local seen = {}
+    local function consider(f)
+        if seen[f] or f == self.tab or f == self.holder or type(f) ~= "table" then return end
+        seen[f] = true
+        if not f.GetObjectType or f:GetObjectType() ~= "Button" or not f:IsShown() then return end
+        local top, right = f:GetTop(), f:GetRight()
+        if top and right and top <= bottom + 6 and top >= bottom - 40 and (not bestRight or right > bestRight) then
+            best, bestRight = f, right
+        end
+    end
+    for _, tab in ipairs(tabs) do consider(tab) end
+    for _, child in ipairs({ ah:GetChildren() }) do
+        consider(child)
+        if type(child) == "table" and child.GetObjectType and child:GetObjectType() == "Frame" and child.GetChildren then
+            for _, grandchild in ipairs({ child:GetChildren() }) do consider(grandchild) end
+        end
+    end
+    return best
+end
+
+function T:Reanchor()
+    local last = self:LastTab()
     if not self.tab or not last then return end
     self.tab:ClearAllPoints()
-    self.tab:SetPoint("LEFT", last, "RIGHT", TAB_GAP, 0)
+    -- An addon tab anchored (indirectly) to ours would make a cycle; fall
+    -- back to Blizzard's last tab rather than erroring.
+    if not pcall(self.tab.SetPoint, self.tab, "LEFT", last, "RIGHT", TAB_GAP, 0) then
+        local tabs = blizzardTabs()
+        self.tab:ClearAllPoints()
+        if tabs[#tabs] then self.tab:SetPoint("LEFT", tabs[#tabs], "RIGHT", TAB_GAP, 0) end
+    end
 end
 
 function T:RestoreBlizzardTabs()
@@ -41,6 +76,8 @@ function T:Open()
     if not ah or not ah:IsShown() then return end
     if SOUNDKIT and PlaySound then PlaySound(SOUNDKIT.IG_CHARACTER_INFO_TAB) end
     if type(ah.SetDisplayMode) == "function" then ah:SetDisplayMode(PROFITS_MODE) end
+    -- Blizzard (and Auctionator) set their own titles when you switch back.
+    if type(ah.SetTitle) == "function" then ah:SetTitle("Auction House Profits") end
     U:ShowIn("ah", ah)
     for _, tab in ipairs(blizzardTabs()) do PanelTemplates_DeselectTab(tab) end
     PanelTemplates_SelectTab(self.tab)
@@ -112,6 +149,9 @@ function T:Attach(app, core)
     if not check(owner:HookScript(ah, "OnShow", function()
         T:Reanchor()
         T:HookTabs(owner)
+        -- Other addons may add their tabs during this same OnShow.
+        core:After(0, "ah-reanchor", function() T:Reanchor() end)
+        core:After(0.5, "ah-reanchor-late", function() T:Reanchor() end)
         if app:Get("openOnProfitsTab") then
             core:After(0, "ah-open-profits", function() T:Open() end)
         end

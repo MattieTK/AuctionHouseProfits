@@ -104,7 +104,7 @@ test("reputation discounts", function()
     assert(M.Discount(rules, 99) == 0)
 end)
 
-test("ladder includes market and both break-evens, sorted high to low", function()
+test("ladder includes your price and both break-evens, sorted high to low", function()
     local rows = M.Ladder(plan(), 900)
     local tags = {}
     for i, row in ipairs(rows) do
@@ -112,7 +112,7 @@ test("ladder includes market and both break-evens, sorted high to low", function
         for _, t in ipairs(row.tags) do tags[t] = row end
         assert(row.faction and row.neutral)
     end
-    assert(tags.market and tags.market.price == 900)
+    assert(tags.yours and tags.yours.price == 900)
     assert(tags["faction b/e"] and tags["neutral b/e"])
     assert(tags["faction b/e"].faction.profit >= 0, "rounded-up break-even is not a loss")
     -- Above 1g, break-even rows round up to the next silver, never down into a loss.
@@ -143,6 +143,78 @@ test("discount calibration", function()
     assert(none == nil)
     assert(M.MedianDiscount({ 1, 1 }) == 0)
     assert(M.MedianDiscount({ 0.95, 0.95 }) == 5)
+end)
+
+test("gold, silver and copper boxes", function()
+    assert(M.Coins("1", "20", "5") == 12005)
+    assert(M.Coins("", "20", "48") == 2048)
+    assert(M.Coins("", "", "98") == 98)
+    assert(M.Coins("2", "", "") == 20000)
+    assert(M.Coins("", "", "") == nil, "all blank clears")
+    assert(M.Coins("1.5", "", "") == nil, "whole numbers only")
+    assert(M.Coins("x", "", "") == nil)
+    assert(M.Coins(nil, nil, 7) == 7)
+end)
+
+-- The Fine Thread queue from the in-game recording: 77 at 96c, 1,172 at 98c
+-- (plus 7 of yours), 8 more at 98c, 16 at 99c, 471 at 1s 2c.
+local queue = {
+    { price = 96, qty = 77, sellers = 2 },
+    { price = 98, qty = 1172, seller = "Uncle Havoki" },
+    { price = 98, qty = 7, mine = 7 },
+    { price = 98, qty = 8 },
+    { price = 99, qty = 16 },
+    { price = 102, qty = 471, sellers = 4 },
+}
+
+test("market levels merge prices and split out your units", function()
+    local levels = M.Levels(queue)
+    assert(#levels == 4)
+    assert(levels[1].price == 96 and levels[1].qty == 77)
+    assert(levels[2].price == 98 and levels[2].qty == 1187 and levels[2].mine == 7)
+    assert(levels[2].seller == "Uncle Havoki")
+    assert(#M.Levels(queue, 2) == 2, "limit keeps the cheapest")
+    assert(#M.Levels({ { price = 0, qty = 5 }, { price = 10, qty = 0 } }) == 0, "ignores junk")
+end)
+
+test("queue position and undercut", function()
+    local levels = M.Levels(queue)
+    assert(M.AheadAt(levels, 95) == 0)
+    assert(M.AheadAt(levels, 96) == 77, "same price: the older listings sell first")
+    assert(M.AheadAt(levels, 98) == 77 + 1180, "your own units don't count against you")
+    assert(M.Undercut(levels) == 95)
+    assert(M.LowestOther(levels) == 96)
+    -- Only your own units at the bottom: undercut the cheapest other seller.
+    local mineFirst = M.Levels({ { price = 50, qty = 3, mine = 3 }, { price = 60, qty = 10 } })
+    assert(M.Undercut(mineFirst) == 59 and M.LowestOther(mineFirst) == 60)
+    assert(M.Undercut({}) == nil)
+    assert(M.Undercut(M.Levels({ { price = 1, qty = 5 } })) == 1, "never below 1c")
+    -- Clients without copper prices: whole silver, 1s under.
+    assert(M.Undercut(M.Levels({ { price = 2100, qty = 5 } }), false) == 2000)
+    assert(M.PostablePrice(2099, false) == 2000 and M.PostablePrice(50, false) == 100 and M.PostablePrice(2099.7) == 2099)
+    assert(M.Positions(levels, nil, nil, false)[1].price == 100, "95c rounds to the 1s floor")
+end)
+
+test("positions: 1c under each level, with profit", function()
+    local levels = M.Levels(queue)
+    local p = plan(60)
+    local rows = M.Positions(levels, p)
+    assert(rows[1].price == 95 and rows[1].ahead == 0)
+    assert(rows[2].price == 97 and rows[2].ahead == 77)
+    assert(rows[3].price == 98 and rows[3].ahead == 1257, "1c under 99c ties with the 98c queue")
+    assert(rows[4].price == 101)
+    assert(rows[1].faction and rows[1].neutral and rows[1].faction.profit > rows[1].neutral.profit)
+    assert(#M.Positions(levels, nil, 2) == 2 and M.Positions(levels)[1].faction == nil)
+end)
+
+test("sale profit and quotes", function()
+    -- 13 Fine Thread sold for 12s 74c gross at 5%; paid 90c each.
+    local r = M.SaleProfit(1274, 13, 90, 0.05)
+    assert(r.cut == 63 and r.net == 1211 and r.cost == 1170 and r.profit == 41)
+    assert(M.SaleProfit(1000, 5, nil, 0.05).profit == nil, "unknown cost")
+    local q = M.Quote(20, 97, 90, 0.05, 15)
+    assert(q.gross == 1940 and q.cut == 97 and q.profit == 1940 - 97 - 1800 and q.deposit == 15)
+    near(q.profitUnit, q.profit / 20, 1e-9)
 end)
 
 print(total .. " model tests passed")

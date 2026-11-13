@@ -1,6 +1,7 @@
 local ADDON, ns = ...
 local M, D, P, R, U, T = ns.Model, ns.Data, ns.Prices, ns.Merchant, ns.UI, ns.AuctionTab
-local VERSION = "0.1.0"
+local S, B = ns.Post, ns.AuctionsBar
+local VERSION = "0.2.0"
 
 -- WoW Forever only (interface 16001). Other clients have different AH rules.
 local interface = select(4, GetBuildInfo())
@@ -26,6 +27,8 @@ end
 local view
 local state = app:State({ revision = 0 })
 local function publish()
+    -- The Auctions-tab strip isn't a state watcher; refresh it directly.
+    if B.bar and B.bar:IsShown() then core:After(0, "auctions-bar", function() B:Refresh() end) end
     local ok, err = state:Update(function(draft) draft.revision = draft.revision + 1 end)
     if not ok and err.code == "reentrant" then
         core:After(0, "publish", publish)
@@ -86,17 +89,35 @@ local function onMerchantShow()
     if count > 0 then publish() end
 end
 
+local function attachAH()
+    T:Attach(app, core)
+    B:Attach(app, core)
+end
+
 app:OnReady(function()
-    D:Load()
+    D:Load(time())
     P:Attach(core)
     P:OnChange(function() publish() end)
+    S:Attach(app, core)
+    S:OnChange(function(id)
+        publish()
+        -- After a post, re-read the item's listings so "ahead" counts are current.
+        if id and not S:IsBusy() and P.ahOpen then core:After(0.5, "rescan", function() P:Scan(id) end) end
+    end)
     required(core:Event("MERCHANT_SHOW", onMerchantShow))
     required(core:Event("GET_ITEM_INFO_RECEIVED", onItemInfo))
     required(core:Event("BAG_UPDATE_DELAYED", function()
-        if U:IsShown() and U.filter == "bags" then publish() end
+        if U:IsShown() or (B.bar and B.bar:IsShown()) then publish() end
     end))
+    required(core:Event("PLAYER_MONEY", function()
+        if R:OnMoney() then publish() end
+    end))
+    if type(BuyMerchantItem) == "function" then
+        local ok = core:PostHook("BuyMerchantItem", function(index, quantity) R:OnBuy(index, quantity, time()) end)
+        if not ok then app.log:Info("Purchase tracking unavailable") end
+    end
     required(core:Event("ADDON_LOADED", function(name)
-        if name == "Blizzard_AuctionHouseUI" then T:Attach(app, core) end
+        if name == "Blizzard_AuctionHouseUI" then attachAH() end
     end))
     -- Shift-clicking an item while our search box has focus selects it.
     local linked
@@ -107,7 +128,7 @@ app:OnReady(function()
     end
     if not linked then app.log:Info("Shift-click item search unavailable") end
     if C_AddOns and C_AddOns.IsAddOnLoaded and C_AddOns.IsAddOnLoaded("Blizzard_AuctionHouseUI") then
-        T:Attach(app, core)
+        attachAH()
     end
     if D.readOnly then
         app.log:Warn("Saved data is from a newer version of " .. ADDON .. "; changes won't be saved.")

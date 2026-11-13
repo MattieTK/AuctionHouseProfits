@@ -8,7 +8,7 @@ ns.SOURCE_CHOICES = {
     { value = "auctionator", label = "Auctionator" },
     { value = "tsm", label = "TradeSkillMaster" },
     { value = "auctioneer", label = "Auctioneer" },
-    { value = "manual", label = "Manual price only" },
+    { value = "manual", label = "None (I set my own price)" },
 }
 
 function ns.ConfigureSettings(app)
@@ -23,15 +23,18 @@ function ns.ConfigureSettings(app)
             neutralMultiplier = { type = "number", default = 5, min = 1, max = 20, label = "Neutral deposit multiplier" },
             minDeposit = { type = "integer", default = 100, min = 0, max = 100000, label = "Minimum deposit (copper)" },
             useGameDeposit = { type = "boolean", default = true, label = "Ask the game for the exact deposit when the AH is open" },
-            duration = { type = "enum", default = 3, values = { 1, 2, 3 }, label = "Default duration" },
+            duration = { type = "enum", default = 2, values = { 1, 2, 3 }, label = "Default duration" },
+            durationFromAH = { type = "boolean", default = true, label = "Use the duration last picked on the AH Sell page" },
             sellChance = { type = "integer", default = 70, min = 1, max = 100, label = "Chance a listing sells (%)" },
             maxListings = { type = "integer", default = 3, min = 0, max = 20, label = "Max listings per stack (0 = until sold)" },
             unsold = { type = "enum", default = "vendor", values = { "vendor", "keep", "zero" }, label = "Stacks that never sell" },
             defaultStacks = { type = "integer", default = 1, min = 1, max = 100, label = "Default number of stacks" },
-            discountFriendly = { type = "number", default = 0, min = 0, max = 50, label = "Friendly discount (%)" },
-            discountHonored = { type = "number", default = 10, min = 0, max = 50, label = "Honored discount (%)" },
-            discountRevered = { type = "number", default = 10, min = 0, max = 50, label = "Revered discount (%)" },
-            discountExalted = { type = "number", default = 10, min = 0, max = 50, label = "Exalted discount (%)" },
+            -- Classic-era vendor discounts. v0.1 shipped 0/10/10/10 under other
+            -- keys; new keys so those saved values don't carry over.
+            friendlyDiscount = { type = "number", default = 5, min = 0, max = 50, label = "Friendly discount (%)" },
+            honoredDiscount = { type = "number", default = 10, min = 0, max = 50, label = "Honored discount (%)" },
+            reveredDiscount = { type = "number", default = 15, min = 0, max = 50, label = "Revered discount (%)" },
+            exaltedDiscount = { type = "number", default = 20, min = 0, max = 50, label = "Exalted discount (%)" },
             priceSource = { type = "enum", default = "auto", values = sources, label = "Market price source" },
             scanFreshMinutes = { type = "integer", default = 120, min = 5, max = 1440, label = "AH scans count as fresh for (minutes)" },
             autoScan = { type = "boolean", default = true, label = "Scan the AH when I select an item" },
@@ -49,8 +52,8 @@ function ns.Rules(app)
         depositPerHour = app:Get("depositPerHour"), neutralMultiplier = app:Get("neutralMultiplier"),
         minDeposit = app:Get("minDeposit"),
         discounts = {
-            [4] = 0, [5] = app:Get("discountFriendly"), [6] = app:Get("discountHonored"),
-            [7] = app:Get("discountRevered"), [8] = app:Get("discountExalted"),
+            [4] = 0, [5] = app:Get("friendlyDiscount"), [6] = app:Get("honoredDiscount"),
+            [7] = app:Get("reveredDiscount"), [8] = app:Get("exaltedDiscount"),
         },
     }
 end
@@ -119,7 +122,8 @@ function ns.ConfigureOptions(app, SND)
                     { type = "checkbox", key = "useGameDeposit", label = "Ask the game for the exact deposit when the AH is open" },
                 } },
                 { title = "Selling", controls = {
-                    { type = "select", key = "duration", label = "Default duration", choices = durationChoices() },
+                    { type = "checkbox", key = "durationFromAH", label = "Use the duration last picked on the AH Sell page" },
+                    { type = "select", key = "duration", label = "Otherwise, default duration", choices = durationChoices() },
                     { type = "slider", key = "sellChance", label = "Chance a listing sells (%)", step = 1 },
                     { type = "number", key = "maxListings", label = "Max listings per stack", hint = "0 keeps relisting until it sells." },
                     { type = "select", key = "unsold", label = "Stacks that never sell", choices = {
@@ -132,10 +136,10 @@ function ns.ConfigureOptions(app, SND)
             } },
             { id = "reputation", label = "Reputation", sections = {
                 { title = "Vendor discounts by standing", controls = {
-                    { type = "number", key = "discountFriendly", label = "Friendly (%)" },
-                    { type = "number", key = "discountHonored", label = "Honored (%)" },
-                    { type = "number", key = "discountRevered", label = "Revered (%)" },
-                    { type = "number", key = "discountExalted", label = "Exalted (%)" },
+                    { type = "number", key = "friendlyDiscount", label = "Friendly (%)" },
+                    { type = "number", key = "honoredDiscount", label = "Honored (%)" },
+                    { type = "number", key = "reveredDiscount", label = "Revered (%)" },
+                    { type = "number", key = "exaltedDiscount", label = "Exalted (%)" },
                     calibrationComponent(),
                 } },
             } },

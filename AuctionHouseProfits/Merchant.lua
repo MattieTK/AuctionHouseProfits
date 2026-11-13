@@ -74,3 +74,41 @@ function R:Scan(now)
     D:AddRatios(reaction, ratios, now)
     return recorded, missing, reaction
 end
+
+---------------------------------------------------------------------------
+-- Purchases: what you actually paid, for profit on later sales.
+-- BuyMerchantItem is post-hooked; the purchase only counts once your money
+-- drops by about the expected amount (so failed buys are never recorded).
+---------------------------------------------------------------------------
+R.pending = {}
+
+local function money() return GetMoney and GetMoney() or nil end
+
+function R:OnBuy(index, quantity, now)
+    local info, id = merchantItem(index), itemIDAt(index)
+    if not info or not id or info.hasExtendedCost or not readable(info.price) or not M.Number(info.price) or info.price <= 0 then return end
+    local stack = M.Number(info.stackCount) and info.stackCount > 0 and info.stackCount or 1
+    local units = M.Number(quantity) and quantity > 0 and quantity or stack
+    local unit = info.price / stack
+    if #self.pending == 0 then self.money = money() end
+    self.pending[#self.pending + 1] = { id = id, units = units, unit = unit, time = GetTime and GetTime() or 0, now = now }
+end
+
+function R:OnMoney()
+    local current, before = money(), self.money
+    self.money = current
+    if not current or not before or current >= before or #self.pending == 0 then return end
+    local spent, clock = before - current, GetTime and GetTime() or 0
+    for i = #self.pending, 1, -1 do
+        if clock - self.pending[i].time > 10 then table.remove(self.pending, i) end
+    end
+    for i, p in ipairs(self.pending) do
+        -- Units from the money that left, in case the client counts stacks differently.
+        local units = math.floor(spent / p.unit + 0.5)
+        if units >= 1 and math.abs(units * p.unit - spent) <= math.max(1, units) then
+            D:RecordPurchase(p.id, units, spent, p.now)
+            table.remove(self.pending, i)
+            return true
+        end
+    end
+end

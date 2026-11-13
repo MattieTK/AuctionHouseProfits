@@ -67,6 +67,23 @@ function M.ParseMoney(text)
     return floor(total + 0.5)
 end
 
+-- Gold, silver and copper boxes to copper. Blank boxes count as zero; all
+-- blank (or non-numeric) returns nil.
+function M.Coins(g, s, c)
+    local total, any, parts = 0, false, { g, s, c }
+    for i = 1, 3 do
+        local v = parts[i] -- not ipairs: a nil box would end the loop early
+        local text = type(v) == "string" and v:gsub("^%s+", ""):gsub("%s+$", "") or v
+        if text ~= nil and text ~= "" then
+            local n = tonumber(text)
+            if not n or n < 0 or n ~= floor(n) then return nil end
+            any = true
+            total = total + n * (i == 1 and 10000 or i == 2 and 100 or 1)
+        end
+    end
+    return any and total or nil
+end
+
 ---------------------------------------------------------------------------
 -- Rules
 ---------------------------------------------------------------------------
@@ -191,7 +208,7 @@ function M.Ladder(plan, reference)
         end
         if tag then row.tags[#row.tags + 1] = tag end
     end
-    for _, step in ipairs(LADDER_STEPS) do add(reference * step, step == 1 and "market" or nil) end
+    for _, step in ipairs(LADDER_STEPS) do add(reference * step, step == 1 and "yours" or nil) end
     if f0.breakEvenUnit < huge then add(f0.breakEvenUnit, "faction b/e", true) end
     if n0.breakEvenUnit < huge then add(n0.breakEvenUnit, "neutral b/e", true) end
     table.sort(rows, function(a, b) return a.price > b.price end)
@@ -200,6 +217,106 @@ function M.Ladder(plan, reference)
         row.neutral = M.Evaluate(plan, "neutral", row.price, true)
     end
     return rows
+end
+
+---------------------------------------------------------------------------
+-- Live market depth
+---------------------------------------------------------------------------
+-- results = { { price = unit copper, qty = n, mine = your units, sellers = n, seller = name } }
+-- Returns price levels, cheapest first, with your units split out.
+function M.Levels(results, limit)
+    local by, levels = {}, {}
+    for _, r in ipairs(results or {}) do
+        if M.Number(r.price) and r.price > 0 and M.Number(r.qty) and r.qty > 0 then
+            local price = floor(r.price + 0.5)
+            local level = by[price]
+            if not level then
+                level = { price = price, qty = 0, mine = 0, sellers = 0 }
+                by[price] = level
+                levels[#levels + 1] = level
+            end
+            level.qty = level.qty + r.qty
+            level.mine = level.mine + min(r.qty, M.Number(r.mine) and max(0, r.mine) or 0)
+            level.sellers = level.sellers + (M.Number(r.sellers) and r.sellers or 1)
+            if r.seller and not level.seller then level.seller = r.seller end
+        end
+    end
+    table.sort(levels, function(a, b) return a.price < b.price end)
+    for i = #levels, (limit or 12) + 1, -1 do levels[i] = nil end
+    return levels
+end
+
+-- Other sellers' units that sell before a new listing at this price: every
+-- cheaper unit, plus units already listed at the same price (they're older).
+function M.AheadAt(levels, price)
+    local ahead = 0
+    for _, l in ipairs(levels or {}) do
+        if l.price <= price then ahead = ahead + l.qty - (l.mine or 0) end
+    end
+    return ahead
+end
+
+-- The cheapest price someone else is asking, and the level it's at.
+function M.LowestOther(levels)
+    for _, l in ipairs(levels or {}) do
+        if l.qty - (l.mine or 0) > 0 then return l.price, l end
+    end
+end
+
+-- A price the AH accepts: whole copper, or whole silver (rounded down, never
+-- below 1s) when the client doesn't take copper.
+function M.PostablePrice(price, copperAllowed)
+    price = floor(price)
+    if copperAllowed == false then return max(100, floor(price / 100) * 100) end
+    return max(1, price)
+end
+
+-- Default listing price: one step (1c, or 1s without copper) under the
+-- cheapest other seller.
+function M.Undercut(levels, copperAllowed)
+    local lowest = M.LowestOther(levels)
+    if lowest then return M.PostablePrice(lowest - 1, copperAllowed) end
+end
+
+-- Prices worth listing at: 1c under each level, so you sell before that
+-- level and everything above it. Matching a level is never better than
+-- undercutting the next one. plan (optional) adds faction/neutral profit.
+function M.Positions(levels, plan, limit, copperAllowed)
+    local rows, seen = {}, {}
+    for _, l in ipairs(levels or {}) do
+        if l.qty - (l.mine or 0) > 0 then
+            local price = M.PostablePrice(l.price - 1, copperAllowed)
+            if not seen[price] then
+                seen[price] = true
+                local row = { price = price, ahead = M.AheadAt(levels, price), undercuts = l }
+                if plan then
+                    row.faction = M.Evaluate(plan, "faction", price, true)
+                    row.neutral = M.Evaluate(plan, "neutral", price, true)
+                end
+                rows[#rows + 1] = row
+                if limit and #rows >= limit then break end
+            end
+        end
+    end
+    return rows
+end
+
+-- What one sale actually made: gross buyout less the cut, less what the
+-- units cost. The deposit comes back on a sale, so it isn't counted.
+function M.SaleProfit(gross, qty, unitCost, cutRate)
+    local cut = floor(gross * (cutRate or 0))
+    local net = gross - cut
+    local cost = M.Number(unitCost) and unitCost * qty or nil
+    return { gross = gross, cut = cut, net = net, cost = cost, profit = cost and net - cost or nil }
+end
+
+-- A single listing of qty units at price, if it sells.
+function M.Quote(qty, priceUnit, unitCost, cutRate, deposit)
+    local gross = floor(priceUnit * qty + 0.5)
+    local sale = M.SaleProfit(gross, qty, unitCost, cutRate)
+    sale.deposit = deposit
+    sale.profitUnit = sale.profit and sale.profit / qty or nil
+    return sale
 end
 
 ---------------------------------------------------------------------------

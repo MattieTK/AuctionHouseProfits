@@ -42,6 +42,32 @@ local function gameDeposit(id, durationIndex, quantity)
     end
 end
 
+-- The duration last picked on Blizzard's Sell page (a CVar), if enabled.
+local function ahDuration(app)
+    if not app:Get("durationFromAH") or not GetCVar then return nil end
+    local ok, v = pcall(GetCVar, "auctionHouseDurationDropdown")
+    v = ok and tonumber(v)
+    return (v == 1 or v == 2 or v == 3) and v or nil
+end
+A.AHDuration = ahDuration
+
+function A.BagCount(id)
+    if C_Item and C_Item.GetItemCount then
+        local ok, n = pcall(C_Item.GetItemCount, id, false, false, false)
+        if ok and readable(n) and M.Number(n) then return n end
+    end
+    local n = 0
+    if not C_Container or not C_Container.GetContainerNumSlots then return n end
+    local last = NUM_TOTAL_EQUIPPED_BAG_SLOTS or NUM_BAG_SLOTS or 4
+    for bag = 0, last do
+        for slot = 1, C_Container.GetContainerNumSlots(bag) or 0 do
+            local info = C_Container.GetContainerItemInfo(bag, slot)
+            if type(info) == "table" and info.itemID == id then n = n + (M.Number(info.stackCount) and info.stackCount or 1) end
+        end
+    end
+    return n
+end
+
 -- Full analysis for one item.
 function A.Item(app, id, now)
     now = now or time()
@@ -66,10 +92,32 @@ function A.Item(app, id, now)
 
     out.stackSize = M.Number(plan.stackSize) and plan.stackSize >= 1 and math.floor(plan.stackSize) or info.maxStack
     out.stacks = M.Number(plan.stacks) and plan.stacks >= 1 and math.floor(plan.stacks) or app:Get("defaultStacks")
-    out.duration = (plan.duration == 1 or plan.duration == 2 or plan.duration == 3) and plan.duration or app:Get("duration")
+    out.duration = (plan.duration == 1 or plan.duration == 2 or plan.duration == 3) and plan.duration
+        or ahDuration(app) or app:Get("duration")
 
     out.market = P:Resolve(id, info.link, app:Get("priceSource"), app:Get("scanFreshMinutes") * 60, now)
     out.prices = P:All(id, info.link, now)
+    local scan = D:Scan(id)
+    out.levels = scan and scan.levels and #scan.levels > 0 and scan.levels or nil
+    out.levelsAge = out.levels and now - scan.time or nil
+    out.listed = scan and scan.qty
+
+    -- The price everything is evaluated at: yours, else 1c under the
+    -- cheapest other seller, else the market price.
+    local copper = ns.Post.CopperAllowed()
+    out.undercut = M.Undercut(out.levels, copper)
+    if M.Number(plan.price) and plan.price > 0 then
+        out.price, out.priceKind = plan.price, "yours"
+    elseif out.undercut then
+        out.price, out.priceKind = out.undercut, "undercut"
+    elseif out.market then
+        out.price, out.priceKind = out.market.price, "market"
+    end
+    out.ahead = out.price and out.levels and M.AheadAt(out.levels, out.price) or nil
+    out.paidUnit = D:PaidUnit(id)
+    out.bagCount = A.BagCount(id)
+    local sold, gross, profit, n = D:SalesFor(id, now - 7 * 86400)
+    out.sales = n > 0 and { qty = sold, gross = gross, profit = profit, count = n } or nil
 
     local deposit = {
         faction = M.FormulaDeposit(rules, info.sellPrice, out.stackSize, out.duration, "faction"),
@@ -85,16 +133,21 @@ function A.Item(app, id, now)
         end
     end
     out.deposit = deposit
+    out.venue = out.gameDepositVenue or P.venue or "faction"
     out.odds = M.Odds(app:Get("sellChance"), app:Get("maxListings"))
 
-    if not out.unitCost then return out end -- nothing to compare against yet
+    if not out.unitCost then -- nothing to compare against yet
+        out.positions = M.Positions(out.levels, nil, 13, ns.Post.CopperAllowed())
+        return out
+    end
 
     local function planFor(unitCost)
         return { stackSize = out.stackSize, stacks = out.stacks, unitCost = unitCost, vendorSellUnit = info.sellPrice,
             unsold = app:Get("unsold"), odds = out.odds, deposit = deposit, rules = rules }
     end
     out.plan = planFor(out.unitCost)
-    local price = out.market and out.market.price
+    local price = out.price
+    out.positions = M.Positions(out.levels, out.plan, 13, ns.Post.CopperAllowed())
     if price then
         out.faction = M.Evaluate(out.plan, "faction", price, true)
         out.neutral = M.Evaluate(out.plan, "neutral", price, true)
@@ -120,15 +173,37 @@ function A.Item(app, id, now)
     return out
 end
 
+-- What a unit you're about to list cost you: what you paid, if we saw you
+-- buy it, else the vendor/override cost.
+function A.CostBasis(app, id, now)
+    local paid = D:PaidUnit(id)
+    if paid then return paid, "paid" end
+    local a = A.Item(app, id, now)
+    return a.unitCost, a.costOverride and "override" or (a.unitCost and "vendor" or nil)
+end
+
+-- One listing of qty units at price at the AH you're standing at, if it sells.
+function A.Quote(app, id, qty, price, now)
+    local a = A.Item(app, id, now)
+    local unitCost, basis = A.CostBasis(app, id, now)
+    local venue = a.venue
+    local dep = gameDeposit(id, a.duration, qty)
+        or M.FormulaDeposit(a.rules, a.info.sellPrice, qty, a.duration, venue)
+    local q = M.Quote(qty, price, unitCost, M.CutRate(a.rules, venue), dep)
+    q.venue, q.basis, q.duration = venue, basis, a.duration
+    q.ahead = a.levels and M.AheadAt(a.levels, price) or nil
+    return q, a
+end
+
 -- Light summary for list rows.
 function A.Summary(app, id, now)
     local a = A.Item(app, id, now)
     local best
-    if a.faction and a.market then
+    if a.faction and a.price then
         best = a.faction.profitUnit >= a.neutral.profitUnit and a.faction or a.neutral
     end
     return { id = id, name = a.info.name, icon = a.info.icon, quality = a.info.quality, link = a.info.link,
-        hasVendor = a.vendor ~= nil, unitCost = a.unitCost, market = a.market and a.market.price,
+        hasVendor = a.vendor ~= nil, unitCost = a.unitCost, market = a.price,
         profitUnit = best and best.profitUnit, margin = best and best.margin, npc = a.vendor and a.vendor.npc }
 end
 

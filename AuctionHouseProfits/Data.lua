@@ -6,17 +6,46 @@ local M = ns.Model
 local D = { readOnly = false, revision = 0 }
 ns.Data = D
 
-local SCHEMA = 1
+local SCHEMA = 2
+local SALE_DAYS = 30
+local TABLES = { "items", "scans", "manual", "plans", "calibration", "purchases", "sales" }
 
 local function isID(k) return type(k) == "number" and k > 0 and k == math.floor(k) end
 
 local function fresh()
-    return { version = SCHEMA, items = {}, scans = {}, manual = {}, plans = {}, calibration = {} }
+    local db = { version = SCHEMA }
+    for _, key in ipairs(TABLES) do db[key] = {} end
+    return db
+end
+
+-- v1 wrote "Your price" into the manual market price, which then hid real
+-- scan data. v2 keeps your price on the plan and the market price separate.
+local function migrate(db)
+    if (M.Number(db.version) and db.version or 1) < 2 and type(db.manual) == "table" then
+        if type(db.plans) ~= "table" then db.plans = {} end
+        for id, price in pairs(db.manual) do
+            if isID(id) and M.Number(price) and price > 0 then
+                local plan = type(db.plans[id]) == "table" and db.plans[id] or {}
+                if plan.price == nil then plan.price = price end
+                db.plans[id] = plan
+            end
+        end
+        db.manual = {}
+    end
+end
+
+local function validLevels(levels)
+    if type(levels) ~= "table" then return nil end
+    local out = {}
+    for _, l in ipairs(levels) do
+        if type(l) == "table" and M.Number(l.price) and M.Number(l.qty) then out[#out + 1] = l end
+    end
+    return out
 end
 
 -- Drop malformed records instead of erroring later in the UI.
-local function sanitize(db)
-    for _, key in ipairs({ "items", "scans", "manual", "plans", "calibration" }) do
+local function sanitize(db, now)
+    for _, key in ipairs(TABLES) do
         if type(db[key]) ~= "table" then db[key] = {} end
     end
     for id, item in pairs(db.items) do
@@ -27,7 +56,22 @@ local function sanitize(db)
         end
     end
     for id, scan in pairs(db.scans) do
-        if not isID(id) or type(scan) ~= "table" or not M.Number(scan.price) or not M.Number(scan.time) then db.scans[id] = nil end
+        if not isID(id) or type(scan) ~= "table" or not M.Number(scan.price) or not M.Number(scan.time) then
+            db.scans[id] = nil
+        else
+            scan.levels = validLevels(scan.levels)
+        end
+    end
+    for id, p in pairs(db.purchases) do
+        if not isID(id) or type(p) ~= "table" or not M.Number(p.qty) or p.qty <= 0 or not M.Number(p.spent) then
+            db.purchases[id] = nil
+        end
+    end
+    for auctionID, sale in pairs(db.sales) do
+        if not isID(auctionID) or type(sale) ~= "table" or not isID(sale.id) or not M.Number(sale.qty)
+            or not M.Number(sale.gross) or not M.Number(sale.time) or (now and sale.time < now - SALE_DAYS * 86400) then
+            db.sales[auctionID] = nil
+        end
     end
     for id, price in pairs(db.manual) do
         if not isID(id) or not M.Number(price) or price < 0 then db.manual[id] = nil end
@@ -42,7 +86,7 @@ local function sanitize(db)
     end
 end
 
-function D:Load()
+function D:Load(now)
     local db = _G.AuctionHouseProfitsData
     if db == nil then
         db = fresh()
@@ -57,8 +101,9 @@ function D:Load()
         self.db = copy
         return false
     else
+        migrate(db)
         db.version = SCHEMA
-        sanitize(db)
+        sanitize(db, now)
     end
     self.db = db
     return true
@@ -94,13 +139,22 @@ function D:RecordVendor(id, offer)
     self:Touch()
 end
 
-function D:RecordScan(id, price, quantity, now)
+-- levels: market depth from M.Levels (optional).
+function D:RecordScan(id, price, quantity, now, levels)
     if self.readOnly or not isID(id) then return end
-    self.db.scans[id] = { price = price, qty = quantity, time = now }
+    self.db.scans[id] = { price = price, qty = quantity, time = now, levels = levels }
     self:Touch()
 end
 
 function D:Scan(id) return self.db and self.db.scans[id] end
+
+-- A search found nothing listed: keep the last price for reference, drop the sellers.
+function D:ClearListings(id, now)
+    local scan = self.db and self.db.scans[id]
+    if self.readOnly or not scan then return end
+    scan.levels, scan.qty, scan.time = {}, 0, now
+    self:Touch()
+end
 
 function D:SetManual(id, price)
     if self.readOnly or not isID(id) then return end
@@ -140,6 +194,42 @@ function D:Calibration(reaction)
     local list = {}
     for _, r in pairs(cal.items) do list[#list + 1] = r end
     return M.MedianDiscount(list)
+end
+
+-- What you actually paid merchants, for profit on sales.
+function D:RecordPurchase(id, units, spent, now)
+    if self.readOnly or not isID(id) or not M.Number(units) or units <= 0 or not M.Number(spent) then return end
+    local p = self.db.purchases[id]
+    if not p then p = { qty = 0, spent = 0 }; self.db.purchases[id] = p end
+    p.qty, p.spent, p.time = p.qty + units, p.spent + spent, now
+    self:Touch()
+end
+
+-- Average price paid per unit, or nil if we never saw you buy it.
+function D:PaidUnit(id)
+    local p = self.db and self.db.purchases[id]
+    return p and p.qty > 0 and p.spent / p.qty or nil
+end
+
+-- One record per sold auction; returns true the first time it's seen.
+function D:RecordSale(auctionID, sale)
+    if self.readOnly or not isID(auctionID) or self.db.sales[auctionID] then return false end
+    self.db.sales[auctionID] = sale
+    self:Touch()
+    return true
+end
+
+-- Sales of an item since a time: qty, gross, profit (nil if any cost unknown), count.
+function D:SalesFor(id, since)
+    local qty, gross, profit, n = 0, 0, 0, 0
+    for _, sale in pairs(self.db and self.db.sales or {}) do
+        if sale.id == id and sale.time >= (since or 0) then
+            local r = M.SaleProfit(sale.gross, sale.qty, sale.unitCost, sale.cutRate)
+            qty, gross, n = qty + sale.qty, gross + sale.gross, n + 1
+            profit = profit and r.profit and profit + r.profit or nil
+        end
+    end
+    return qty, gross, profit, n
 end
 
 function D:ForgetVendor(id)

@@ -65,7 +65,7 @@ end
 function P:All(id, link, now)
     local list = {}
     local manual = D:Manual(id)
-    if manual then list[#list + 1] = { source = "manual", label = "Manual", price = manual } end
+    if manual then list[#list + 1] = { source = "manual", label = "Manual", price = manual } end -- v1 data only
     local scan = D:Scan(id)
     if scan then list[#list + 1] = { source = "scan", label = "My scan", price = scan.price, age = now - scan.time, qty = scan.qty } end
     for _, key in ipairs(self.ORDER) do
@@ -121,36 +121,87 @@ end
 
 function P:IsScanning(id) return self.pending and self.pending.id == id end
 
-local function finish(id, unit, quantity)
+-- Any search result for an item, whoever asked for it (us, the Blizzard
+-- Buy/Auctions pages, Auctionator), refreshes its recorded market depth.
+local function record(id, results, total)
+    local levels = M.Levels(results, 12)
+    local unit = levels[1] and levels[1].price or nil
     if P.pending and P.pending.id == id then P.pending = nil end
-    if unit then D:RecordScan(id, unit, quantity, time()) end
+    if unit then D:RecordScan(id, unit, total, time(), levels) end
     notify(id)
 end
 
 function P:OnCommodityResults(itemID)
-    if not readable(itemID) or not self.pending or self.pending.id ~= itemID then return end
+    if not readable(itemID) or not M.Number(itemID) then return end
     local n = C_AuctionHouse.GetNumCommoditySearchResults(itemID) or 0
-    if n == 0 then return finish(itemID, nil) end
-    local first = C_AuctionHouse.GetCommoditySearchResultInfo(itemID, 1)
-    local total = C_AuctionHouse.GetCommoditySearchResultsQuantity and C_AuctionHouse.GetCommoditySearchResultsQuantity(itemID)
-    finish(itemID, first and price(first.unitPrice), readable(total) and total or nil)
+    if not readable(n) then return end
+    if n == 0 then
+        local full = C_AuctionHouse.HasFullCommoditySearchResults and C_AuctionHouse.HasFullCommoditySearchResults(itemID)
+        local asked = self.pending and self.pending.id == itemID
+        if asked or full == true then
+            if asked then self.pending = nil end
+            D:ClearListings(itemID, time()) -- sold out: stale sellers mustn't set your price
+            notify(itemID)
+        end
+        return
+    end
+    local results, total = {}, 0
+    for i = 1, math.min(n, 200) do
+        local r = C_AuctionHouse.GetCommoditySearchResultInfo(itemID, i)
+        if type(r) == "table" and price(r.unitPrice) and readable(r.quantity) and M.Number(r.quantity) then
+            local owners = type(r.owners) == "table" and r.owners or {}
+            results[#results + 1] = {
+                price = r.unitPrice, qty = r.quantity,
+                mine = readable(r.numOwnerItems) and M.Number(r.numOwnerItems) and r.numOwnerItems or 0,
+                sellers = readable(r.totalNumberOfOwners) and M.Number(r.totalNumberOfOwners) and r.totalNumberOfOwners or 1,
+                seller = readable(owners[1]) and type(owners[1]) == "string" and owners[1] or nil,
+            }
+            total = total + r.quantity
+        end
+    end
+    local all = C_AuctionHouse.GetCommoditySearchResultsQuantity and C_AuctionHouse.GetCommoditySearchResultsQuantity(itemID)
+    record(itemID, results, readable(all) and M.Number(all) and all or total)
 end
 
 function P:OnItemResults(itemKey)
-    if type(itemKey) ~= "table" or not readable(itemKey.itemID) then return end
+    if type(itemKey) ~= "table" or not readable(itemKey.itemID) or not M.Number(itemKey.itemID) then return end
     local id = itemKey.itemID
-    if not self.pending or self.pending.id ~= id then return end
     local n = C_AuctionHouse.GetNumItemSearchResults(itemKey) or 0
-    local best, count = nil, 0
-    for i = 1, math.min(n, 50) do
+    if not readable(n) then return end
+    local results, count = {}, 0
+    for i = 1, math.min(n, 100) do
         local r = C_AuctionHouse.GetItemSearchResultInfo(itemKey, i)
-        if r and price(r.buyoutAmount) and M.Number(r.quantity) and r.quantity > 0 then
-            local unit = r.buyoutAmount / r.quantity
-            if not best or unit < best then best = unit end
+        if type(r) == "table" and price(r.buyoutAmount) and readable(r.quantity) and M.Number(r.quantity) and r.quantity > 0 then
+            local owners = type(r.owners) == "table" and r.owners or {}
+            results[#results + 1] = {
+                price = r.buyoutAmount / r.quantity, qty = r.quantity,
+                mine = r.containsOwnerItem == true and r.quantity or 0, sellers = 1,
+                seller = readable(owners[1]) and type(owners[1]) == "string" and owners[1] or nil,
+            }
             count = count + r.quantity
         end
     end
-    finish(id, best and math.floor(best + 0.5), count)
+    if #results == 0 then
+        local full = C_AuctionHouse.HasFullItemSearchResults and C_AuctionHouse.HasFullItemSearchResults(itemKey)
+        local asked = self.pending and self.pending.id == id
+        if asked or full == true then
+            if asked then self.pending = nil end
+            D:ClearListings(id, time())
+            notify(id)
+        end
+        return
+    end
+    record(id, results, count)
+end
+
+-- Which auction house you're standing at. Neutral AHs are in Booty Bay,
+-- Gadgetzan and Everlook (classic and modern map IDs). A game-computed
+-- deposit, when we have one, overrides this (see Analysis).
+local NEUTRAL_MAPS = { [1434] = true, [1446] = true, [1452] = true, [210] = true, [224] = true, [71] = true, [83] = true }
+function P:DetectVenue()
+    local map = C_Map and C_Map.GetBestMapForUnit and C_Map.GetBestMapForUnit("player")
+    self.venue = readable(map) and NEUTRAL_MAPS[map] and "neutral" or "faction"
+    return self.venue
 end
 
 function P:Attach(scope)
@@ -158,8 +209,10 @@ function P:Attach(scope)
         local ok, err = scope:Event(event, fn)
         if not ok then error(err.message) end
     end
-    on("AUCTION_HOUSE_SHOW", function() P.ahOpen = true; notify(nil) end)
-    on("AUCTION_HOUSE_CLOSED", function() P.ahOpen = false; P.pending = nil; notify(nil) end)
+    on("AUCTION_HOUSE_SHOW", function() P.ahOpen = true; P:DetectVenue(); notify(nil) end)
+    on("AUCTION_HOUSE_CLOSED", function() P.ahOpen = false; P.pending = nil; P.venue = nil; notify(nil) end)
     on("COMMODITY_SEARCH_RESULTS_UPDATED", function(itemID) P:OnCommodityResults(itemID) end)
+    on("COMMODITY_SEARCH_RESULTS_ADDED", function(itemID) P:OnCommodityResults(itemID) end)
     on("ITEM_SEARCH_RESULTS_UPDATED", function(itemKey) P:OnItemResults(itemKey) end)
+    on("ITEM_SEARCH_RESULTS_ADDED", function(itemKey) P:OnItemResults(itemKey) end)
 end
