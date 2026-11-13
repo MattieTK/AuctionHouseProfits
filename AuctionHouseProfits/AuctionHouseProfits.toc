@@ -1,0 +1,26 @@
+## Interface: 16001
+## Title: Auction House Profits
+## Notes: Vendor-to-auction profit calculator with a Profits tab in the auction house: reputation discounts, deposits, faction vs neutral cut and break-even prices.
+## Author: tk.gg
+## Version: 0.1.0
+## SavedVariables: AuctionHouseProfitsDB, AuctionHouseProfitsData
+## OptionalDeps: Auctionator, TradeSkillMaster, Auc-Advanced
+## IconTexture: Interface\Icons\INV_Misc_Coin_02
+## AddonCompartmentFunc: AuctionHouseProfits_OnAddonCompartmentClick
+## Category: Auction & Economy
+Libs/SomethingNeedDoing/Core.lua
+Libs/SomethingNeedDoing/Diagnostics.lua
+Libs/SomethingNeedDoing/Scope.lua
+Libs/SomethingNeedDoing/State.lua
+Libs/SomethingNeedDoing/Settings.lua
+Libs/SomethingNeedDoing/UI.lua
+Libs/SomethingNeedDoing/Options.lua
+Model.lua
+Data.lua
+Settings.lua
+Prices.lua
+Merchant.lua
+Analysis.lua
+UI.lua
+AuctionTab.lua
+Core.lua

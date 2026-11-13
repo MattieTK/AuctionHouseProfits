@@ -1,0 +1,102 @@
+name: Release addon
+
+# Push an annotated tag (vX.Y.Z, or vX.Y.Z-alpha.N / -beta.N) on main to release.
+# Re-run with workflow_dispatch to resume a release for an existing tag.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing annotated tag on main to publish or resume
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      commit: ${{ steps.metadata.outputs.commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify tag, version and Forever metadata
+        id: metadata
+        run: |
+          git fetch origin main:refs/remotes/origin/main
+          git fetch --force origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          python3 tools/release.py
+      - name: Install LuaJIT
+        run: sudo apt-get update && sudo apt-get install -y luajit
+      - name: Test and build
+        run: |
+          luajit tests/model_test.lua
+          luajit tests/runtime_test.lua
+          python3 tools/package.py
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-package
+          path: |
+            dist/AuctionHouseProfits-*.zip
+            dist/SHA256SUMS
+            dist/release.json
+            dist/notes.md
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-package
+          path: dist
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: python3 tools/publish_github.py
+      - name: Check CurseForge setup
+        id: curseforge
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+        run: |
+          if [ -z "$CF_API_TOKEN" ]; then
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            echo '::warning::CF_API_TOKEN secret is missing. GitHub release published; CurseForge upload NOT attempted.'
+            echo 'CurseForge upload was NOT attempted: add the CF_API_TOKEN repository secret, then re-run this workflow for the same tag.' >> "$GITHUB_STEP_SUMMARY"
+          elif ! grep -q '"project_id": [0-9]' dist/release.json; then
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            echo '::warning::No X-Curse-Project-ID in the TOC. CurseForge upload NOT attempted.'
+          else
+            echo 'configured=true' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Upload to CurseForge
+        if: steps.curseforge.outputs.configured == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+        run: python3 tools/publish_curseforge.py
