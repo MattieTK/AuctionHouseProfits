@@ -466,8 +466,8 @@ function U:BuildDetail(body)
     end)
     local standing = labeled(content, "standing", "dropdown", "Buy at standing", 206, y, 100)
     standing:SetupMenu(function(_, root)
-        for _, s in ipairs(M.STANDINGS) do
-            root:CreateRadio(s.label, function() return U.current and U.current.standing == s.reaction end,
+        for _, s in ipairs(M.TIERS) do
+            root:CreateRadio(s.label, function() return U.current and M.Tier(U.current.standing) == s end,
                 function() U:SetPlan("standing", s.reaction) end, s.reaction)
         end
     end)
@@ -528,14 +528,14 @@ function U:BuildDetail(body)
     repTitle:SetText("Profit per unit, by standing")
     self.repTitle = repTitle
     self.repRows = {}
-    for i = 0, #M.STANDINGS do
+    for i = 0, #M.TIERS do
         local r = {}
         local rowY = y - 16 - i * ROW_H
         local font = i == 0 and "GameFontDisableSmall" or "GameFontHighlightSmall"
         r.name = text(content, font)
-        r.name:SetPoint("TOPLEFT", 0, rowY); r.name:SetWidth(62)
+        r.name:SetPoint("TOPLEFT", 0, rowY); r.name:SetWidth(76)
         r.cost = text(content, font)
-        r.cost:SetPoint("TOPLEFT", 64, rowY); r.cost:SetWidth(66); r.cost:SetJustifyH("RIGHT")
+        r.cost:SetPoint("TOPLEFT", 76, rowY); r.cost:SetWidth(54); r.cost:SetJustifyH("RIGHT")
         r.faction = text(content, font)
         r.faction:SetPoint("TOPLEFT", 134, rowY); r.faction:SetWidth(62); r.faction:SetJustifyH("RIGHT")
         r.neutral = text(content, font)
@@ -547,7 +547,7 @@ function U:BuildDetail(body)
     self.repRows[0].faction:SetText("Faction")
     self.repRows[0].neutral:SetText("Neutral")
     local repNote = text(content, "GameFontDisableSmall")
-    repNote:SetPoint("TOPLEFT", 0, y - 16 - (#M.STANDINGS + 1) * ROW_H - 4)
+    repNote:SetPoint("TOPLEFT", 0, y - 16 - (#M.TIERS + 1) * ROW_H - 4)
     repNote:SetWidth(262)
     repNote:SetWordWrap(true)
     self.repNote = repNote
@@ -767,8 +767,8 @@ function U:RefreshDetail()
     end
     if a.unitCost then
         s.cost.value:SetText(Money(a.unitCost))
-        local st = M.STANDING_BY_REACTION[a.standing]
-        local basis = a.costOverride and "your override" or ((st and st.label or "") .. ", " .. M.Discount(a.rules, a.standing) .. "% off")
+        local d = M.Discount(a.rules, a.standing)
+        local basis = a.costOverride and "your override" or (M.Tier(a.standing).label .. (d > 0 and (", " .. d .. "% off") or ", full price"))
         if a.paidUnit then basis = basis .. ", paid " .. Money(a.paidUnit) end
         s.cost.sub:SetText(basis)
     else
@@ -798,8 +798,7 @@ function U:RefreshDetail()
     if a.ahead then priceNote = priceNote .. " · " .. (a.ahead == 0 and "sells first" or (count(a.ahead) .. " ahead")) end
     self.priceSub:SetText(priceNote)
     self:Caption(inputs.duration, U.DurationLabel(a.duration))
-    local st = M.STANDING_BY_REACTION[a.standing]
-    self:Caption(inputs.standing, st and st.label or "")
+    self:Caption(inputs.standing, M.Tier(a.standing).label)
 
     -- Cards
     local hours = M.DURATION_HOURS[a.duration]
@@ -830,9 +829,9 @@ function U:RefreshDetail()
 
     -- Standing table
     self.repTitle:SetText("Profit per unit at " .. (a.price and Money(a.price) or "your price") .. ", by standing")
-    for i, sd in ipairs(M.STANDINGS) do
+    for i, sd in ipairs(M.TIERS) do
         local r, row = self.repRows[i], a.byStanding and a.byStanding[i]
-        local mine = sd.reaction == a.standing
+        local mine = sd == M.Tier(a.standing)
         r.name:SetText(mine and color(ACCENT, sd.label) or sd.label)
         r.cost:SetText(row and Money(row.unitCost) or color(MUTED, "-"))
         r.faction:SetText(row and row.faction and Money(row.faction.profitUnit, true, true) or color(MUTED, "-"))

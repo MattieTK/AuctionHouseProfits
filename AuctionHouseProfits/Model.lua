@@ -18,6 +18,16 @@ M.STANDINGS = {
 M.STANDING_BY_REACTION = {}
 for _, s in ipairs(M.STANDINGS) do M.STANDING_BY_REACTION[s.reaction] = s end
 
+-- WoW Forever has two vendor price tiers: full price below Honored, one
+-- discount from Honored up. reaction is the tier's representative standing.
+M.TIERS = {
+    { reaction = 4, key = "full", label = "Below Honored" },
+    { reaction = 6, key = "honored", label = "Honored+" },
+}
+function M.Tier(reaction)
+    return (reaction or 4) >= 6 and M.TIERS[2] or M.TIERS[1]
+end
+
 -- Vendors in this era typically sell at 4x the price they pay you.
 M.VENDOR_MARKUP = 4
 

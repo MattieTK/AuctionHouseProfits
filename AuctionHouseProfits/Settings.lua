@@ -29,12 +29,9 @@ function ns.ConfigureSettings(app)
             maxListings = { type = "integer", default = 3, min = 0, max = 20, label = "Max listings per stack (0 = until sold)" },
             unsold = { type = "enum", default = "vendor", values = { "vendor", "keep", "zero" }, label = "Stacks that never sell" },
             defaultStacks = { type = "integer", default = 1, min = 1, max = 100, label = "Default number of stacks" },
-            -- Classic-era vendor discounts. v0.1 shipped 0/10/10/10 under other
-            -- keys; new keys so those saved values don't carry over.
-            friendlyDiscount = { type = "number", default = 5, min = 0, max = 50, label = "Friendly discount (%)" },
-            honoredDiscount = { type = "number", default = 10, min = 0, max = 50, label = "Honored discount (%)" },
-            reveredDiscount = { type = "number", default = 15, min = 0, max = 50, label = "Revered discount (%)" },
-            exaltedDiscount = { type = "number", default = 20, min = 0, max = 50, label = "Exalted discount (%)" },
+            -- WoW Forever: no discount below Honored, one discount from Honored up.
+            -- (0.2.0 briefly used Classic's 5/10/15/20 under other keys.)
+            honoredPlusDiscount = { type = "number", default = 10, min = 0, max = 50, label = "Discount from Honored up (%)" },
             priceSource = { type = "enum", default = "auto", values = sources, label = "Market price source" },
             scanFreshMinutes = { type = "integer", default = 120, min = 5, max = 1440, label = "AH scans count as fresh for (minutes)" },
             autoScan = { type = "boolean", default = true, label = "Scan the AH when I select an item" },
@@ -52,8 +49,8 @@ function ns.Rules(app)
         depositPerHour = app:Get("depositPerHour"), neutralMultiplier = app:Get("neutralMultiplier"),
         minDeposit = app:Get("minDeposit"),
         discounts = {
-            [4] = 0, [5] = app:Get("friendlyDiscount"), [6] = app:Get("honoredDiscount"),
-            [7] = app:Get("reveredDiscount"), [8] = app:Get("exaltedDiscount"),
+            [4] = 0, [5] = 0, [6] = app:Get("honoredPlusDiscount"),
+            [7] = app:Get("honoredPlusDiscount"), [8] = app:Get("honoredPlusDiscount"),
         },
     }
 end
@@ -135,11 +132,9 @@ function ns.ConfigureOptions(app, SND)
                 } },
             } },
             { id = "reputation", label = "Reputation", sections = {
-                { title = "Vendor discounts by standing", controls = {
-                    { type = "number", key = "friendlyDiscount", label = "Friendly (%)" },
-                    { type = "number", key = "honoredDiscount", label = "Honored (%)" },
-                    { type = "number", key = "reveredDiscount", label = "Revered (%)" },
-                    { type = "number", key = "exaltedDiscount", label = "Exalted (%)" },
+                { title = "Vendor discount", controls = {
+                    { type = "number", key = "honoredPlusDiscount", label = "Honored, Revered and Exalted (%)",
+                      hint = "Neutral and Friendly pay full price." },
                     calibrationComponent(),
                 } },
             } },

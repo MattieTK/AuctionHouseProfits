@@ -160,7 +160,7 @@ function A.Item(app, id, now)
     -- Same item bought at each standing (only when the cost came from a vendor).
     if out.baseUnit and not out.costOverride then
         out.byStanding = {}
-        for _, s in ipairs(M.STANDINGS) do
+        for _, s in ipairs(M.TIERS) do
             local p = planFor(M.UnitCostAt(rules, out.baseUnit, s.reaction))
             local row = { standing = s, unitCost = p.unitCost }
             if price then

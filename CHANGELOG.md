@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1
+
+- **Reputation discounts match WoW Forever:** full price at Neutral and Friendly, 10% off from Honored up. 0.2.0 wrongly used Classic's 5/10/15/20%. One setting now covers Honored, Revered and Exalted. The standing table and "Buy at standing" show the two price tiers instead of five rows.
+
 ## 0.2.0
 
 From in-game testing at the Undercity auction house.
