@@ -1,5 +1,5 @@
--- Records what merchants charge, and at which reputation standing, so the
--- profit view can show vendor cost for every standing.
+-- Records what merchants charge, and your reputation standing with each
+-- merchant, so costs follow the discount you actually get.
 local _, ns = ...
 local M, D = ns.Model, ns.Data
 local R = {}
@@ -48,6 +48,7 @@ function R:Scan(now)
     local npc = UnitName and UnitName("npc")
     if not readable(npc) then npc = nil end
     local zone = GetRealZoneText and GetRealZoneText() or nil
+    if npc then D:SetStanding(npc, reaction, now) end
     local recorded, missing, ratios = 0, {}, {}
     local count = GetMerchantNumItems() or 0
     for i = 1, count do
@@ -73,6 +74,18 @@ function R:Scan(now)
     end
     D:AddRatios(reaction, ratios, now)
     return recorded, missing, reaction
+end
+
+-- Refresh your standing with a vendor you've shopped at when you target or
+-- mouse over them, so reaching Honored shows up without another visit.
+function R:CheckUnit(unit, now)
+    if not UnitName or not UnitReaction then return false end
+    if UnitIsPlayer and UnitIsPlayer(unit) then return false end
+    local npc = UnitName(unit)
+    if not readable(npc) or not D:IsVendor(npc) then return false end
+    local reaction = UnitReaction(unit, "player")
+    if not readable(reaction) then return false end
+    return D:SetStanding(npc, reaction, now)
 end
 
 ---------------------------------------------------------------------------

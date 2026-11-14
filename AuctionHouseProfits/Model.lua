@@ -311,6 +311,123 @@ function M.Positions(levels, plan, limit, copperAllowed)
     return rows
 end
 
+-- The live market as a table: one row per price level with how many are
+-- listed there, and profit if you list 1c under it. A ghost row shows where
+-- your own price would sit (after any units already at that price).
+-- plan (optional) adds faction/neutral profit; qty = units you'd list.
+function M.MarketRows(levels, plan, price, qty, limit, copperAllowed)
+    local rows, ghost = {}, nil
+    local function evaluate(row, at)
+        if plan then
+            row.faction = M.Evaluate(plan, "faction", at, true)
+            row.neutral = M.Evaluate(plan, "neutral", at, true)
+        end
+    end
+    if M.Number(price) and price > 0 then
+        ghost = { ghost = true, price = price, qty = qty, ahead = M.AheadAt(levels, price) }
+        evaluate(ghost, price)
+    end
+    for _, l in ipairs(levels or {}) do
+        if ghost and not ghost.index and price < l.price then
+            rows[#rows + 1] = ghost; ghost.index = #rows
+        end
+        local listAt = M.PostablePrice(l.price - 1, copperAllowed)
+        local row = { price = l.price, qty = l.qty, mine = l.mine or 0, level = l, listAt = listAt,
+            ahead = M.AheadAt(levels, listAt) }
+        evaluate(row, listAt)
+        rows[#rows + 1] = row
+    end
+    if ghost and not ghost.index then rows[#rows + 1] = ghost; ghost.index = #rows end
+    limit = limit or #rows
+    if #rows > limit then
+        -- Keep the ghost visible: drop the dearest levels after it first.
+        local keep = {}
+        for i, row in ipairs(rows) do
+            if i <= limit - ((ghost and ghost.index > limit) and 1 or 0) then keep[#keep + 1] = row end
+        end
+        if ghost and ghost.index > limit then keep[#keep + 1] = ghost end
+        rows = keep
+    end
+    return rows
+end
+
+---------------------------------------------------------------------------
+-- Market activity, from your scan history
+---------------------------------------------------------------------------
+-- history = { { t = time, p = lowest unit price or nil, q = units listed } },
+-- oldest first. A market where the listed count moves between scans is one
+-- people buy from; one that sits still is one you'd wait in.
+M.ACTIVITY = {
+    busy = { label = "Busy", rank = 4 },
+    active = { label = "Active", rank = 3 },
+    slow = { label = "Slow", rank = 2 },
+    stagnant = { label = "Stagnant", rank = 1 },
+}
+local GAP_CAP = 86400 -- one long gap shouldn't dilute the rate
+
+function M.Activity(history, now, days)
+    local since = (now or 0) - (days or 7) * 86400
+    local pts = {}
+    for _, h in ipairs(history or {}) do
+        if M.Number(h.t) and M.Number(h.q) and h.t >= since then pts[#pts + 1] = h end
+    end
+    local out = { points = #pts, last = pts[#pts], first = pts[1] }
+    if #pts < 2 then return out end
+    local changes, drops, adds, span, pairsSeen = 0, 0, 0, 0, 0
+    for i = 2, #pts do
+        local a, b = pts[i - 1], pts[i]
+        local dt = b.t - a.t
+        if dt > 0 then
+            pairsSeen = pairsSeen + 1
+            span = span + min(dt, GAP_CAP)
+            local d = b.q - a.q
+            if d ~= 0 then changes = changes + 1 end
+            if d < 0 then drops = drops - d else adds = adds + d end
+        end
+    end
+    out.rescans, out.changes, out.drops, out.adds, out.span = pairsSeen, changes, drops, adds, span
+    if pairsSeen == 0 then return out end
+    out.changeRate = changes / pairsSeen
+    -- Units that left (bought, cancelled or expired) per day: an upper bound on sales.
+    if span >= 600 then out.soldPerDay = drops / span * 86400 end
+    local r = out.changeRate
+    local key
+    if r >= 0.6 then key = "busy" elseif r >= 0.3 then key = "active" elseif r > 0 then key = "slow" else key = "stagnant" end
+    -- A quiet hour says little; only call a market stagnant over real time.
+    if key == "stagnant" and span < 3 * 3600 then key = "slow" end
+    out.key = key
+    out.level = M.ACTIVITY[key]
+    out.confident = pairsSeen >= 3
+    return out
+end
+
+-- Profit per day if you list at the front of the queue: what leaves the
+-- market each day, capped at what you'd list.
+function M.ProfitPerDay(profitUnit, activity, listing)
+    if not M.Number(profitUnit) or not activity or not M.Number(activity.soldPerDay) then return nil end
+    local units = activity.soldPerDay
+    if M.Number(listing) and listing > 0 then units = min(units, listing) end
+    return profitUnit * units
+end
+
+-- Group history into n equal time buckets between from and to, for a chart.
+-- Each bucket keeps the last listed count and the lowest price seen in it.
+function M.Buckets(history, from, to, n)
+    local buckets = {}
+    for i = 1, n do buckets[i] = { from = from + (to - from) * (i - 1) / n, to = from + (to - from) * i / n } end
+    if to <= from then return buckets end
+    for _, h in ipairs(history or {}) do
+        if M.Number(h.t) and h.t >= from and h.t <= to then
+            local i = min(n, floor((h.t - from) / (to - from) * n) + 1)
+            local b = buckets[i]
+            b.q, b.t = h.q, h.t
+            if M.Number(h.p) and (not b.p or h.p < b.p) then b.p = h.p end
+            b.n = (b.n or 0) + 1
+        end
+    end
+    return buckets
+end
+
 -- What one sale actually made: gross buyout less the cut, less what the
 -- units cost. The deposit comes back on a sale, so it isn't counted.
 function M.SaleProfit(gross, qty, unitCost, cutRate)

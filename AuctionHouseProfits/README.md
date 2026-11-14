@@ -13,12 +13,13 @@ Is it worth buying this from a vendor and selling it on the auction house? This 
 
 For the item you pick:
 
-- **Vendor price** before discounts, and **your cost** at your reputation standing.
+- **Vendor price** before discounts, and **your cost** at your standing with that vendor. The game reports your standing whenever you visit, target or mouse over the vendor, so there's nothing to set.
 - **Lowest price on the AH** from your last scan, or from Auctionator, TradeSkillMaster or Auctioneer.
 - **Your price** in gold, silver and copper boxes. It defaults to 1c under the cheapest other seller; type your own, or press **Reset** to go back.
-- **Faction AH vs. neutral AH, side by side:** total profit, profit per unit, margin, ROI and break-even price. Also the deposit per listing and how much you can expect to lose to listings that expire.
-- **Profit per unit by standing:** cost and profit below Honored (full price) and from Honored up (discounted).
-- **Live market:** each price you could list at (1c under each seller), how many units sell before yours, and profit per stack. Click a row to use that price.
+- **Profit at the faction AH:** total profit, profit per unit, margin, ROI and break-even price. Also the deposit per listing and how much you can expect to lose to listings that expire. Turn on **Show the neutral auction house** in Options to compare Booty Bay, Gadgetzan and Everlook side by side. It always shows while you're standing at one.
+- **Market activity:** how often the number listed changed between your scans, about how many units leave the AH a day, and what you'd make a day if you list first. Busy markets sell; quiet ones leave you waiting.
+- **Price & volume chart:** the lowest price (line) and units listed (bars) from each of your scans over the last week. Hover for the numbers.
+- **Live market:** every price level on the AH, how many units are listed at each, and profit per stack if you list 1c under it. A highlighted row shows where your price would sit. Click a level to list 1c under it.
 - **Price ladder:** 150% down to 50% of your price, with both break-even points marked.
 - **Post:** lists your stack from your bags at your price and duration.
 
@@ -34,7 +35,8 @@ Select one of your items on Blizzard's **Auctions** tab and a strip appears in t
 ## How it learns prices
 
 - **Vendor prices:** open any merchant and the add-on records what they charge and your standing with them. Turn this off in Options.
-- **Market prices:** with the AH open, selecting an item runs one price search, or press **Scan AH**. Searches you run on the Buy or Auctions pages, or through Auctionator, update the recorded listings too. There's no background scanning. Prices from Auctionator, TSM or Auctioneer are used automatically when those add-ons are installed.
+- **Market prices:** with the AH open, selecting an item runs one price search, or press **Scan AH**. **Scan list** searches every item in the list in turn. Searches you run on the Buy or Auctions pages, or through Auctionator, update the recorded listings and history too. Nothing scans in the background.
+- **Sorting:** the list puts profitable, busy markets first (**Profit per day**). Items without enough scans to judge come next, by profit per unit. The bars beside each profit show how busy its market is. You can also sort by **Profit per unit** or **Busiest markets**. Prices from Auctionator, TSM or Auctioneer are used automatically when those add-ons are installed.
 - **What you paid:** buying from a merchant records the price once the money leaves your bags. Sold auctions use it for profit; otherwise the vendor price at your standing.
 - **Reputation discounts:** WoW Forever has two price tiers: full price at Neutral and Friendly, 10% off at Honored, Revered and Exalted. The add-on also compares merchant prices against the usual 4× vendor markup, then shows the discount it actually saw at each standing under **Options → Reputation**. If those don't match the defaults, change them there.
 

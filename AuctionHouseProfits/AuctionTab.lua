@@ -7,7 +7,7 @@
 -- no tab index, so Blizzard leaves tab selection to us. Blizzard tabs are only
 -- observed through additive hooks.
 local ADDON, ns = ...
-local U = ns.UI
+local U, M = ns.UI, ns.Model
 local T = { attached = false, hooked = {} }
 ns.AuctionTab = T
 
@@ -22,22 +22,19 @@ end
 -- The right-most tab under the AH frame, whoever added it. Auctionator and
 -- others add their own tabs after Blizzard's, so "last Blizzard tab" isn't
 -- enough: we'd sit on top of theirs. Tabs are buttons hanging below the
--- frame's bottom edge.
+-- frame's bottom edge. Also returns the tab before it, to copy the spacing.
 function T:LastTab()
     local ah = AuctionHouseFrame
     local tabs = blizzardTabs()
-    local best, bestRight = tabs[#tabs], nil
     local bottom = ah and ah.GetBottom and ah:GetBottom()
-    if not bottom then return best end
-    local seen = {}
+    if not bottom then return tabs[#tabs], tabs[#tabs - 1] end
+    local seen, row = {}, {}
     local function consider(f)
-        if seen[f] or f == self.tab or f == self.holder or type(f) ~= "table" then return end
+        if type(f) ~= "table" or seen[f] or f == self.tab or f == self.holder then return end
         seen[f] = true
         if not f.GetObjectType or f:GetObjectType() ~= "Button" or not f:IsShown() then return end
-        local top, right = f:GetTop(), f:GetRight()
-        if top and right and top <= bottom + 6 and top >= bottom - 40 and (not bestRight or right > bestRight) then
-            best, bestRight = f, right
-        end
+        local top, right, left = f:GetTop(), f:GetRight(), f:GetLeft()
+        if top and right and left and top <= bottom + 6 and top >= bottom - 40 then row[#row + 1] = f end
     end
     for _, tab in ipairs(tabs) do consider(tab) end
     for _, child in ipairs({ ah:GetChildren() }) do
@@ -46,16 +43,29 @@ function T:LastTab()
             for _, grandchild in ipairs({ child:GetChildren() }) do consider(grandchild) end
         end
     end
-    return best
+    if #row == 0 then return tabs[#tabs], tabs[#tabs - 1] end
+    table.sort(row, function(a, b) return a:GetRight() < b:GetRight() end)
+    return row[#row], row[#row - 1]
+end
+
+-- Blizzard's tab art has transparent edges, so its tabs overlap by 15px.
+-- Other addons' tabs (Auctionator's) may be drawn edge to edge with a gap.
+-- Use whatever spacing the last two tabs have between them.
+function T:Gap(last, prev)
+    if not last or not prev or not last.GetLeft or not prev.GetRight then return TAB_GAP end
+    local l, r = last:GetLeft(), prev:GetRight()
+    local gap = M.Number(l) and M.Number(r) and l - r or nil
+    if not gap or gap < -20 or gap > 20 then return TAB_GAP end
+    return math.floor(gap + 0.5)
 end
 
 function T:Reanchor()
-    local last = self:LastTab()
+    local last, prev = self:LastTab()
     if not self.tab or not last then return end
     self.tab:ClearAllPoints()
     -- An addon tab anchored (indirectly) to ours would make a cycle; fall
     -- back to Blizzard's last tab rather than erroring.
-    if not pcall(self.tab.SetPoint, self.tab, "LEFT", last, "RIGHT", TAB_GAP, 0) then
+    if not pcall(self.tab.SetPoint, self.tab, "LEFT", last, "RIGHT", self:Gap(last, prev), 0) then
         local tabs = blizzardTabs()
         self.tab:ClearAllPoints()
         if tabs[#tabs] then self.tab:SetPoint("LEFT", tabs[#tabs], "RIGHT", TAB_GAP, 0) end
@@ -129,6 +139,9 @@ function T:Attach(app, core)
             return false
         end
         tab:SetText("Profits")
+        -- Blizzard drops a selected tab's label 5px; next to other addons'
+        -- tabs (which are rarely selected) that reads as misaligned.
+        tab.selectedTextY = tab.deselectedTextY or 2
         tab:SetScript("OnClick", function() T:Open() end)
         self.tab, self.holder = tab, holder
         PanelTemplates_DeselectTab(tab)

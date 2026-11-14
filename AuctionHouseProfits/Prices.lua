@@ -121,6 +121,45 @@ end
 
 function P:IsScanning(id) return self.pending and self.pending.id == id end
 
+-- Scan a list of items one after another (the list's Scan button). Each
+-- search waits for the last one's results (or 6s) and for the AH throttle.
+-- P.after(delay, key, fn) is the timer, set by Core.
+local QUEUE_TIMEOUT = 6
+function P:StartQueue(ids)
+    if not self.ahOpen or #ids == 0 then return false end
+    self.queue = { ids = ids, next = 1, total = #ids }
+    notify(nil)
+    self:Pump()
+    return true
+end
+
+function P:StopQueue()
+    if self.queue then self.queue = nil; notify(nil) end
+end
+
+-- Items searched so far and the list's length, while a queue runs.
+function P:QueueProgress()
+    local q = self.queue
+    if q then return q.next - 1, q.total end
+end
+
+function P:Pump()
+    local q = self.queue
+    if not q then return end
+    if not self.ahOpen then self:StopQueue(); return end
+    local clock = GetTime and GetTime() or 0
+    if self.pending and clock - self.pending.time > QUEUE_TIMEOUT then self.pending = nil end
+    if not self.pending then
+        if q.next > q.total then self:StopQueue(); return end
+        if self:CanScan() then
+            local id = q.ids[q.next]
+            q.next = q.next + 1
+            self:Scan(id)
+        end
+    end
+    if self.after then self.after(0.4, "scan-queue", function() P:Pump() end) end
+end
+
 -- Any search result for an item, whoever asked for it (us, the Blizzard
 -- Buy/Auctions pages, Auctionator), refreshes its recorded market depth.
 local function record(id, results, total)
@@ -210,7 +249,7 @@ function P:Attach(scope)
         if not ok then error(err.message) end
     end
     on("AUCTION_HOUSE_SHOW", function() P.ahOpen = true; P:DetectVenue(); notify(nil) end)
-    on("AUCTION_HOUSE_CLOSED", function() P.ahOpen = false; P.pending = nil; P.venue = nil; notify(nil) end)
+    on("AUCTION_HOUSE_CLOSED", function() P.ahOpen = false; P.pending = nil; P.venue = nil; P.queue = nil; notify(nil) end)
     on("COMMODITY_SEARCH_RESULTS_UPDATED", function(itemID) P:OnCommodityResults(itemID) end)
     on("COMMODITY_SEARCH_RESULTS_ADDED", function(itemID) P:OnCommodityResults(itemID) end)
     on("ITEM_SEARCH_RESULTS_UPDATED", function(itemKey) P:OnItemResults(itemKey) end)

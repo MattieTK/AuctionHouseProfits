@@ -1,7 +1,7 @@
 local ADDON, ns = ...
 local M, D, P, R, U, T = ns.Model, ns.Data, ns.Prices, ns.Merchant, ns.UI, ns.AuctionTab
 local S, B = ns.Post, ns.AuctionsBar
-local VERSION = "0.2.1"
+local VERSION = "0.3.0"
 
 -- WoW Forever only (interface 16001). Other clients have different AH rules.
 local interface = select(4, GetBuildInfo())
@@ -97,6 +97,7 @@ end
 app:OnReady(function()
     D:Load(time())
     P:Attach(core)
+    P.after = function(delay, key, fn) core:After(delay, key, fn) end
     P:OnChange(function() publish() end)
     S:Attach(app, core)
     S:OnChange(function(id)
@@ -109,6 +110,11 @@ app:OnReady(function()
     required(core:Event("BAG_UPDATE_DELAYED", function()
         if U:IsShown() or (B.bar and B.bar:IsShown()) then publish() end
     end))
+    for _, pair in ipairs({ { "PLAYER_TARGET_CHANGED", "target" }, { "UPDATE_MOUSEOVER_UNIT", "mouseover" } }) do
+        required(core:Event(pair[1], function()
+            if R:CheckUnit(pair[2], time()) then publish() end
+        end))
+    end
     required(core:Event("PLAYER_MONEY", function()
         if R:OnMoney() then publish() end
     end))

@@ -8,7 +8,8 @@ ns.Data = D
 
 local SCHEMA = 2
 local SALE_DAYS = 30
-local TABLES = { "items", "scans", "manual", "plans", "calibration", "purchases", "sales" }
+local HISTORY_DAYS, HISTORY_MAX, HISTORY_MERGE = 14, 200, 5
+local TABLES = { "items", "scans", "manual", "plans", "calibration", "purchases", "sales", "history", "standings" }
 
 local function isID(k) return type(k) == "number" and k > 0 and k == math.floor(k) end
 
@@ -61,6 +62,23 @@ local function sanitize(db, now)
         else
             scan.levels = validLevels(scan.levels)
         end
+    end
+    for id, list in pairs(db.history) do
+        if not isID(id) or type(list) ~= "table" then
+            db.history[id] = nil
+        else
+            local kept = {}
+            for _, h in ipairs(list) do
+                if type(h) == "table" and M.Number(h.t) and M.Number(h.q) and h.q >= 0
+                    and (h.p == nil or M.Number(h.p)) and (not now or h.t >= now - HISTORY_DAYS * 86400) then
+                    kept[#kept + 1] = h
+                end
+            end
+            db.history[id] = #kept > 0 and kept or nil
+        end
+    end
+    for npc, s in pairs(db.standings) do
+        if type(npc) ~= "string" or type(s) ~= "table" or not M.STANDING_BY_REACTION[s.reaction] then db.standings[npc] = nil end
     end
     for id, p in pairs(db.purchases) do
         if not isID(id) or type(p) ~= "table" or not M.Number(p.qty) or p.qty <= 0 or not M.Number(p.spent) then
@@ -139,10 +157,30 @@ function D:RecordVendor(id, offer)
     self:Touch()
 end
 
+-- One point per search for the price/volume history. The several result
+-- events one search fires (and quick re-reads) merge into a single point.
+function D:AddHistory(id, price, quantity, now)
+    if self.readOnly or not isID(id) or not M.Number(quantity) or not M.Number(now) then return end
+    local list = self.db.history[id]
+    if not list then list = {}; self.db.history[id] = list end
+    local last = list[#list]
+    local point = { t = now, p = M.Number(price) and price or nil, q = quantity }
+    if last and now - last.t <= HISTORY_MERGE and now >= last.t then
+        list[#list] = point
+    else
+        list[#list + 1] = point
+    end
+    local cutoff = now - HISTORY_DAYS * 86400
+    while #list > HISTORY_MAX or (list[1] and list[1].t < cutoff) do table.remove(list, 1) end
+end
+
+function D:History(id) return self.db and self.db.history[id] or {} end
+
 -- levels: market depth from M.Levels (optional).
 function D:RecordScan(id, price, quantity, now, levels)
     if self.readOnly or not isID(id) then return end
     self.db.scans[id] = { price = price, qty = quantity, time = now, levels = levels }
+    self:AddHistory(id, price, quantity, now)
     self:Touch()
 end
 
@@ -153,6 +191,7 @@ function D:ClearListings(id, now)
     local scan = self.db and self.db.scans[id]
     if self.readOnly or not scan then return end
     scan.levels, scan.qty, scan.time = {}, 0, now
+    self:AddHistory(id, nil, 0, now)
     self:Touch()
 end
 
@@ -231,6 +270,24 @@ function D:SalesFor(id, since)
     end
     return qty, gross, profit, n
 end
+
+-- Your standing with a vendor, as the game last reported it (UnitReaction).
+-- Merchant visits set it; targeting or mousing over the vendor refreshes it.
+function D:SetStanding(npc, reaction, now)
+    if self.readOnly or type(npc) ~= "string" or not M.STANDING_BY_REACTION[reaction] then return false end
+    local s = self.db.standings[npc]
+    if s and s.reaction == reaction then s.time = now; return false end
+    self.db.standings[npc] = { reaction = reaction, time = now }
+    self:Touch()
+    return true
+end
+
+function D:Standing(npc)
+    local s = npc and self.db and self.db.standings[npc]
+    return s and s.reaction, s and s.time
+end
+
+function D:IsVendor(npc) return npc ~= nil and self.db ~= nil and self.db.standings[npc] ~= nil end
 
 function D:ForgetVendor(id)
     local item = self.db and self.db.items[id]

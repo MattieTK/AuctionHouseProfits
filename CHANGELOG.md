@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.0
+
+From in-game testing at the Undercity auction house.
+
+- **Market activity.** Every search is kept as price and volume history for 14 days. The add-on tracks how often the listed count changes between scans and estimates how many units leave the AH a day. From that it rates the market Busy, Active, Slow or Stagnant and works out profit per day if you list first.
+- **The list ranks busy, profitable markets first.** Bars on each row show activity. You can also sort by profit per unit or by busiest markets.
+- **Price & volume chart** for the selected item: lowest price and units listed from your scans.
+- **Scan list** searches every item in the list in turn, to build that history quickly.
+- **Live market shows the quantity at each price** instead of the running "ahead" count, which moved to the tooltip. A highlighted row shows where your price would sit.
+- **Your standing comes from the game.** It's read from each vendor when you visit, target or mouse over them, so the "Buy at standing" menu and the standing table are gone.
+- **The neutral AH is hidden unless you turn it on** (Options → Auction house), or you're standing at one.
+- Two-digit silver and copper now show in the price boxes.
+- The Profits tab copies the spacing between Auctionator's tabs, and its label no longer drops when selected.
+
 ## 0.2.1
 
 - **Reputation discounts match WoW Forever:** full price at Neutral and Friendly, 10% off from Honored up. 0.2.0 wrongly used Classic's 5/10/15/20%. One setting now covers Honored, Revered and Exalted. The standing table and "Buy at standing" show the two price tiers instead of five rows.

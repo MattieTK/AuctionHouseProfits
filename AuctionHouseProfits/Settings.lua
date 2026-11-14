@@ -19,6 +19,8 @@ function ns.ConfigureSettings(app)
         fields = {
             cutFaction = { type = "number", default = 5, min = 0, max = 50, label = "Faction AH cut (%)" },
             cutNeutral = { type = "number", default = 15, min = 0, max = 50, label = "Neutral AH cut (%)" },
+            showNeutral = { type = "boolean", default = false, label = "Show the neutral auction house" },
+            listSort = { type = "enum", default = "day", values = { "day", "unit", "activity" }, label = "Sort items by" },
             depositPerHour = { type = "number", default = 2.5, min = 0, max = 25, label = "Deposit, % of vendor price per hour" },
             neutralMultiplier = { type = "number", default = 5, min = 1, max = 20, label = "Neutral deposit multiplier" },
             minDeposit = { type = "integer", default = 100, min = 0, max = 100000, label = "Minimum deposit (copper)" },
@@ -110,6 +112,8 @@ function ns.ConfigureOptions(app, SND)
         pages = {
             { id = "auction", label = "Auction house", sections = {
                 { title = "Fees", controls = {
+                    { type = "checkbox", key = "showNeutral", label = "Show the neutral auction house",
+                      hint = "Booty Bay, Gadgetzan and Everlook. Always shown while you're standing at one." },
                     { type = "number", key = "cutFaction", label = "Faction AH cut (%)" },
                     { type = "number", key = "cutNeutral", label = "Neutral AH cut (%)" },
                     { type = "number", key = "depositPerHour", label = "Deposit, % of vendor price per hour",

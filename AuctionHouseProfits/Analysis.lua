@@ -82,7 +82,11 @@ function A.Item(app, id, now)
         out.observedUnit = vendor.price / vendor.qty
         out.baseUnit = M.BaseUnitPrice(rules, out.observedUnit, vendor.reaction or 4)
     end
-    out.standing = M.STANDING_BY_REACTION[plan.standing] and plan.standing or (vendor and vendor.reaction) or 4
+    -- Your standing with this vendor as the game last reported it; the
+    -- price was recorded at vendor.reaction, possibly before you ranked up.
+    local current, seenAt = D:Standing(vendor and vendor.npc)
+    out.standing = current or (vendor and vendor.reaction) or 4
+    out.standingTime = seenAt or (vendor and vendor.time)
     out.costOverride = M.Number(plan.cost) and plan.cost or nil
     if out.costOverride then
         out.unitCost = out.costOverride
@@ -114,6 +118,9 @@ function A.Item(app, id, now)
         out.price, out.priceKind = out.market.price, "market"
     end
     out.ahead = out.price and out.levels and M.AheadAt(out.levels, out.price) or nil
+    out.history = D:History(id)
+    out.activity = M.Activity(out.history, now, 7)
+    out.listQty = out.stackSize * out.stacks
     out.paidUnit = D:PaidUnit(id)
     out.bagCount = A.BagCount(id)
     local sold, gross, profit, n = D:SalesFor(id, now - 7 * 86400)
@@ -134,10 +141,13 @@ function A.Item(app, id, now)
     end
     out.deposit = deposit
     out.venue = out.gameDepositVenue or P.venue or "faction"
+    -- The neutral AH is opt-in, unless that's where you're standing.
+    out.showNeutral = app:Get("showNeutral") or (P.ahOpen and out.venue == "neutral")
     out.odds = M.Odds(app:Get("sellChance"), app:Get("maxListings"))
 
     if not out.unitCost then -- nothing to compare against yet
-        out.positions = M.Positions(out.levels, nil, 13, ns.Post.CopperAllowed())
+        out.positions = M.Positions(out.levels, nil, 13, copper)
+        out.marketRows = M.MarketRows(out.levels, nil, out.price, out.listQty, 13, copper)
         return out
     end
 
@@ -147,7 +157,8 @@ function A.Item(app, id, now)
     end
     out.plan = planFor(out.unitCost)
     local price = out.price
-    out.positions = M.Positions(out.levels, out.plan, 13, ns.Post.CopperAllowed())
+    out.positions = M.Positions(out.levels, out.plan, 13, copper)
+    out.marketRows = M.MarketRows(out.levels, out.plan, price, out.listQty, 13, copper)
     if price then
         out.faction = M.Evaluate(out.plan, "faction", price, true)
         out.neutral = M.Evaluate(out.plan, "neutral", price, true)
@@ -156,6 +167,8 @@ function A.Item(app, id, now)
         out.neutral = M.Evaluate(out.plan, "neutral", 0, true)
     end
     out.ladder = M.Ladder(out.plan, price)
+    out.best = A.BestVenue(out)
+    out.perDay = out.best and M.ProfitPerDay(out.best.profitUnit, out.activity, out.listQty) or nil
 
     -- Same item bought at each standing (only when the cost came from a vendor).
     if out.baseUnit and not out.costOverride then
@@ -171,6 +184,14 @@ function A.Item(app, id, now)
         end
     end
     return out
+end
+
+-- The venue whose numbers count: the better of the two when the neutral AH
+-- is shown, else the faction AH.
+function A.BestVenue(a)
+    if not a.faction or not a.price then return nil end
+    if a.showNeutral and a.neutral.profitUnit > a.faction.profitUnit then return a.neutral end
+    return a.faction
 end
 
 -- What a unit you're about to list cost you: what you paid, if we saw you
@@ -198,13 +219,11 @@ end
 -- Light summary for list rows.
 function A.Summary(app, id, now)
     local a = A.Item(app, id, now)
-    local best
-    if a.faction and a.price then
-        best = a.faction.profitUnit >= a.neutral.profitUnit and a.faction or a.neutral
-    end
+    local best = a.best
     return { id = id, name = a.info.name, icon = a.info.icon, quality = a.info.quality, link = a.info.link,
         hasVendor = a.vendor ~= nil, unitCost = a.unitCost, market = a.price,
-        profitUnit = best and best.profitUnit, margin = best and best.margin, npc = a.vendor and a.vendor.npc }
+        profitUnit = best and best.profitUnit, margin = best and best.margin, npc = a.vendor and a.vendor.npc,
+        activity = a.activity, perDay = a.perDay }
 end
 
 ---------------------------------------------------------------------------
@@ -225,8 +244,41 @@ local function bagItemIDs()
 end
 A.BagItemIDs = bagItemIDs
 
+-- How lists order. "day": profitable markets that move first, by profit per
+-- day (profit/unit x what leaves the market daily); then profitable items we
+-- haven't seen enough scans of, by profit/unit; then the rest. "unit": plain
+-- profit per unit. "activity": busiest markets first.
+local function before(av, bv)
+    if av ~= nil and bv ~= nil and av ~= bv then return av > bv end
+    if (av ~= nil) ~= (bv ~= nil) then return av ~= nil end
+end
+local function ranked(tier, value)
+    return function(a, b)
+        local at, bt = tier(a), tier(b)
+        if at ~= bt then return at < bt end
+        local r = before(value(a), value(b))
+        if r ~= nil then return r end
+        r = before(a.profitUnit, b.profitUnit)
+        if r ~= nil then return r end
+        return (a.name or "") < (b.name or "")
+    end
+end
+local function profitable(r) return r.profitUnit ~= nil and r.profitUnit > 0 end
+local SORTS = {
+    day = ranked(function(r)
+        if r.perDay and r.perDay > 0 then return 1 end
+        return profitable(r) and 2 or 3
+    end, function(r) return r.perDay and r.perDay > 0 and r.perDay or nil end),
+    unit = ranked(function() return 1 end, function(r) return r.profitUnit end),
+    activity = ranked(function(r) return r.activity and r.activity.level and 1 or 2 end, function(r)
+        local act = r.activity
+        return act and act.level and (act.level.rank * 1e9 + (act.soldPerDay or 0)) or nil
+    end),
+}
+function A.Sorter(sort) return SORTS[sort] or SORTS.day end
+
 -- filter: "vendor" | "bags" | "all" | "merchant"; query: name text, id or link.
-function A.List(app, filter, query, merchantName, now)
+function A.List(app, filter, query, merchantName, now, sort)
     local candidates = {}
     local db = D.db
     if filter == "bags" or filter == "all" then
@@ -252,11 +304,6 @@ function A.List(app, filter, query, merchantName, now)
         local keep = q == "" or id == wantID or (s.name and s.name:lower():find(q, 1, true))
         if keep then rows[#rows + 1] = s end
     end
-    table.sort(rows, function(a, b)
-        local am, bm = a.profitUnit, b.profitUnit
-        if am and bm and am ~= bm then return am > bm end
-        if (am ~= nil) ~= (bm ~= nil) then return am ~= nil end
-        return (a.name or "") < (b.name or "")
-    end)
+    table.sort(rows, A.Sorter(sort))
     return rows
 end

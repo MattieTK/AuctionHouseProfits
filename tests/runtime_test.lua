@@ -212,6 +212,23 @@ test("buying from a merchant records what you paid, once the money leaves", func
     assert(ns.Data:PaidUnit(14047) == nil)
 end)
 
+test("targeting or mousing over a vendor refreshes your standing with them", function()
+    local name, reaction = UnitName, UnitReaction
+    UnitName = function(u) if u == "npc" or u == "mouseover" or u == "target" then return "Tamar" end end
+    UnitReaction = function() return 5 end
+    W.event("UPDATE_MOUSEOVER_UNIT"); settle()
+    local a = ns.Analysis.Item(ns.App, 2320, os.time())
+    assert(a.standing == 5 and math.abs(a.unitCost - 7 / 0.9) < 1e-9, "Friendly pays the list price")
+    UnitReaction = function() return 6 end
+    W.event("PLAYER_TARGET_CHANGED"); settle()
+    a = ns.Analysis.Item(ns.App, 2320, os.time())
+    assert(a.standing == 6 and math.abs(a.unitCost - 7) < 1e-9, "back to Honored")
+    UnitName = function() return "Some Player" end
+    W.event("UPDATE_MOUSEOVER_UNIT"); settle()
+    assert(ns.Data:Standing("Some Player") == nil, "only vendors you've shopped at")
+    UnitName, UnitReaction = name, reaction
+end)
+
 test("WoW Forever discounts: full price below Honored, 10% from Honored up", function()
     local rules = ns.Rules(ns.App)
     assert(rules.discounts[4] == 0 and rules.discounts[5] == 0)
@@ -248,6 +265,12 @@ test("slash command opens the standalone window with a populated list", function
     assert(ns.UI.selected == 2320 and ns.UI.current and ns.UI.current.id == 2320)
     assert(ns.UI.title:GetText():find("Coarse Thread"))
     assert(ns.UI.cards.faction.profit:GetText() ~= "")
+    assert(not ns.UI.cards.neutral.frame:IsShown() and ns.UI.activityCard.frame:IsShown(), "neutral AH is opt-in")
+    assert(ns.UI.tableHeads[3]:GetText() == "Profit" and not ns.UI.tableHeads[4]:IsShown())
+    assert(ns.App:Set("showNeutral", true)); settle()
+    assert(ns.UI.cards.neutral.frame:IsShown() and not ns.UI.activityCard.frame:IsShown())
+    assert(ns.UI.tableHeads[3]:GetText() == "Faction" and ns.UI.tableHeads[4]:IsShown())
+    assert(ns.App:Set("showNeutral", false)); settle()
     assert(#W.errors == 0, W.errors[1])
 end)
 
@@ -287,7 +310,8 @@ end)
 
 test("closed dropdowns show their value", function()
     assert(ns.UI.inputs.duration.Text:GetText() == "8 Hours")
-    assert(ns.UI.inputs.standing.Text:GetText() == "Honored+")
+    assert(ns.UI.sortDropdown.Text:GetText() == "Profit per day")
+    assert(ns.UI.inputs.standing == nil, "standing comes from the game, not a menu")
     assert(ns.UI.filterDropdown.Text:GetText() == "Vendor items")
     assert(ns.UI.inputs.duration.Text.font, "caption has a font")
 end)
@@ -370,7 +394,16 @@ test("selecting an item auto-scans the AH and uses the game deposit", function()
     assert(a.undercut == 2099 and a.price == 2099 and a.priceKind == "undercut", "defaults to 1c under Bob")
     assert(a.ahead == 0 and a.positions[1].price == 2099 and a.positions[1].ahead == 0)
     assert(#a.positions == 1, "your own 23s listing isn't something to undercut")
-    assert(ns.UI.tableHeads[1]:GetText() == "List at", "live market table shown once listings are known")
+    local rows = a.marketRows
+    assert(#rows == 3 and rows[1].ghost and rows[1].price == 2099 and rows[1].qty == 20, "your listing first")
+    assert(rows[2].price == 2100 and rows[2].qty == 40 and rows[3].price == 2300 and rows[3].mine == 10)
+    assert(ns.UI.tableHeads[1]:GetText() == "Price" and ns.UI.tableHeads[2]:GetText() == "Qty",
+        "live market table shown once listings are known")
+    assert(ns.UI.ladder[2].second:GetText() == "40", "quantity at each price")
+    assert(ns.UI.ladder[1].button.price == nil, "the ghost row isn't a price to click")
+    ns.UI.ladder[2].button:GetScript("OnClick")(ns.UI.ladder[2].button); settle()
+    assert(ns.Data:Plan(14047).price == 2099, "clicking a level lists 1c under it")
+    ns.UI:SetPlan("price", nil); settle()
     local boxes = ns.UI.inputs.price.boxes
     assert(boxes[1]:GetText() == "" and boxes[2]:GetText() == "20" and boxes[3]:GetText() == "99")
     -- Clicking into the price and away again doesn't pin the automatic price.
@@ -403,6 +436,51 @@ test("other addons' searches refresh the market depth too", function()
     assert(ns.Data:Scan(14047).levels[1].qty == 41)
     commodity[14047][1].quantity = 40
     W.event("COMMODITY_SEARCH_RESULTS_UPDATED", 14047); settle()
+end)
+
+test("each search adds to the item's price and volume history", function()
+    local D, now = ns.Data, os.time()
+    local h = D:History(14047)
+    assert(#h >= 1 and h[#h].q == 40 and h[#h].p == 2100)
+    D:AddHistory(3371, 30, 5, now - 100); D:AddHistory(3371, 30, 4, now - 97)
+    local merged = D:History(3371)
+    assert(merged[#merged].q == 4 and merged[#merged].t == now - 97 and (#merged < 2 or merged[#merged - 1].t ~= now - 100),
+        "result events from one search merge")
+    -- Coarse Thread: the count moves on every rescan.
+    for i, q in ipairs({ 300, 280, 290, 260, 250 }) do D:AddHistory(2320, 25, q, now - (6 - i) * 1200) end
+    local a = ns.Analysis.Item(ns.App, 2320, now)
+    assert(a.activity.key == "busy" and a.activity.soldPerDay > 0)
+    assert(a.perDay == nil or a.perDay < 0, "at 25c the 12s deposit eats the profit")
+    ns.Data:SetPlan(2320, "price", 300)
+    a = ns.Analysis.Item(ns.App, 2320, now)
+    assert(a.perDay and a.perDay > 0, "profit per day for an active market")
+    local rows = ns.Analysis.List(ns.App, "vendor", "", nil, now, "day")
+    assert(rows[1].id == 2320 and rows[1].perDay)
+    ns.UI:Select(2320); settle()
+    assert(not ns.UI.chart.empty:IsShown(), "chart drawn")
+    local bars = 0
+    for _, col in ipairs(ns.UI.chart.columns) do if col.bar:IsShown() then bars = bars + 1 end end
+    assert(bars == 5, "one volume bar per scan, got " .. bars)
+    assert(ns.UI.activityCard.profit:GetText():find("Busy"))
+    ns.UI:SetPlan("price", nil); ns.UI:Select(14047); settle()
+end)
+
+test("Scan list searches every item in the list in turn", function()
+    local before = #searches
+    ns.UI:RefreshList()
+    ns.UI:ToggleScanList()
+    assert(ns.Prices:QueueProgress() ~= nil, "queue running")
+    for _ = 1, 10 do
+        local id = searches[#searches]
+        W.event("COMMODITY_SEARCH_RESULTS_UPDATED", id)
+        settle()
+        if not ns.Prices:QueueProgress() then break end
+    end
+    assert(not ns.Prices:QueueProgress(), "queue finished")
+    local seen = {}
+    for i = before + 1, #searches do seen[searches[i]] = true end
+    assert(seen[2320] and seen[3371] and seen[14047], "every listed item searched")
+    assert(ns.UI.scanAllButton.label:GetText() == "Scan list")
 end)
 
 test("Post lists a stack from your bags at your price", function()

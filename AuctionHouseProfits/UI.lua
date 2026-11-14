@@ -38,6 +38,11 @@ local function pct(x)
     return string.format("%d%%", math.floor(x * 100 + (x >= 0 and 0.5 or -0.5)))
 end
 
+local function count(n)
+    if not M.Number(n) then return "?" end
+    return BreakUpLargeNumbers and BreakUpLargeNumbers(n) or tostring(n)
+end
+
 local function ago(seconds)
     if not M.Number(seconds) then return "" end
     if seconds < 90 then return "just now" end
@@ -98,8 +103,8 @@ end
 -- Set(copper) updates the boxes unless you're typing in one of them.
 function U.MoneyInput(parent, makeBox, onCommit)
     local f = CreateFrame("Frame", nil, parent)
-    f:SetSize(152, 22)
-    local widths = { 46, 26, 26 }
+    f:SetSize(158, 22)
+    local widths = { 46, 30, 30 }
     local icons = { "Interface\\MoneyFrame\\UI-GoldIcon", "Interface\\MoneyFrame\\UI-SilverIcon", "Interface\\MoneyFrame\\UI-CopperIcon" }
     local boxes, x = {}, 0
     local function editing()
@@ -116,6 +121,8 @@ function U.MoneyInput(parent, makeBox, onCommit)
     for i = 1, 3 do
         local b = makeBox(f, i)
         b:SetSize(widths[i], 22)
+        -- The default 8px insets leave a 30px box no room for "89".
+        if b.SetTextInsets then b:SetTextInsets(3, 5, 0, 0) end
         b:SetPoint("LEFT", f, "LEFT", x, 0)
         b:SetNumeric(true)
         b:SetMaxLetters(i == 1 and 6 or 2)
@@ -209,7 +216,7 @@ function U:Build()
     top:SetHeight(TOP_H)
     self.top = top
     local search = control(top, "search", "input")
-    search:SetSize(LIST_W - 6, 22)
+    search:SetSize(LIST_W - 36, 22)
     search:SetPoint("LEFT", 8, 0)
     local hint = text(search, "GameFontDisableSmall")
     hint:SetPoint("LEFT", 8, 0)
@@ -223,7 +230,7 @@ function U:Build()
     self.search = search
 
     local filter = control(top, "filter", "dropdown")
-    filter:SetSize(150, 22)
+    filter:SetSize(130, 22)
     filter:SetPoint("LEFT", search, "RIGHT", 8, 0)
     self.filterDropdown = filter
     local filters = {
@@ -239,6 +246,21 @@ function U:Build()
     end)
     self.filters = filters
 
+    local sort = control(top, "sort", "dropdown")
+    sort:SetSize(130, 22)
+    sort:SetPoint("LEFT", filter, "RIGHT", 6, 0)
+    local sorts = {
+        { value = "day", label = "Profit per day" },
+        { value = "unit", label = "Profit per unit" },
+        { value = "activity", label = "Busiest markets" },
+    }
+    sort:SetupMenu(function(_, root)
+        for _, o in ipairs(sorts) do
+            root:CreateRadio(o.label, function() return app:Get("listSort") == o.value end, function() U:SetSort(o.value) end, o.value)
+        end
+    end)
+    self.sortDropdown, self.sorts = sort, sorts
+
     local gear = button(top, "options", "Options", 70)
     gear:SetPoint("RIGHT", -8, 0)
     gear:SetScript("OnClick", function()
@@ -247,6 +269,7 @@ function U:Build()
     end)
     local status = text(top, "GameFontDisableSmall")
     status:SetPoint("RIGHT", gear, "LEFT", -10, 0)
+    status:SetPoint("LEFT", sort, "RIGHT", 8, 0)
     status:SetJustifyH("RIGHT")
     self.status = status
 
@@ -276,8 +299,22 @@ function U:BuildList(body)
 
     local count = text(body, "GameFontDisableSmall")
     count:SetPoint("BOTTOMLEFT", 10, 6)
-    count:SetWidth(LIST_W - 12)
+    count:SetWidth(LIST_W - 94)
     self.count = count
+
+    local scanAll = button(body, "scan-list", "Scan list", 80)
+    scanAll:SetHeight(18)
+    scanAll:SetPoint("BOTTOMLEFT", LIST_W - 84, 2)
+    scanAll:SetScript("OnClick", function() U:ToggleScanList() end)
+    scanAll:SetScript("OnEnter", function(self)
+        if not GameTooltip then return end
+        GameTooltip:SetOwner(self, "ANCHOR_TOP")
+        GameTooltip:AddLine("Scan every item in this list")
+        GameTooltip:AddLine("Searches the AH for each item in turn. Scanning now and again builds the price and volume history that shows which markets are busy.", 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    scanAll:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+    self.scanAllButton = scanAll
 
     local divider = body:CreateTexture(nil, "ARTWORK")
     divider:SetColorTexture(1, 1, 1, .08)
@@ -302,16 +339,24 @@ function U:InitRow(row, data)
         row.value = text(row)
         row.value:SetPoint("RIGHT", -4, 0)
         row.value:SetJustifyH("RIGHT")
+        -- Four bars: how busy this item's market looked in your scans.
+        row.meter = {}
+        for i = 1, 4 do
+            local bar = row:CreateTexture(nil, "ARTWORK")
+            bar:SetSize(2, 2 + i * 2)
+            bar:SetPoint("BOTTOMRIGHT", row.value, "BOTTOMLEFT", -5 - (4 - i) * 3, 1)
+            row.meter[i] = bar
+        end
         row.name = text(row)
         row.name:SetPoint("LEFT", row.icon, "RIGHT", 5, 0)
-        row.name:SetPoint("RIGHT", row.value, "LEFT", -6, 0)
+        row.name:SetPoint("RIGHT", row.value, "LEFT", -20, 0)
         row:SetScript("OnClick", function(self) U:Select(self.data.id) end)
         row:SetScript("OnEnter", function(self)
-            if self.data.link and GameTooltip then
-                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-                GameTooltip:SetHyperlink(self.data.link)
-                GameTooltip:Show()
-            end
+            if not GameTooltip then return end
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            if self.data.link then GameTooltip:SetHyperlink(self.data.link) else GameTooltip:AddLine(self.data.name or "") end
+            U:ActivityLines(GameTooltip, self.data.activity, self.data.profitUnit, self.data.perDay)
+            GameTooltip:Show()
         end)
         row:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
     end
@@ -330,6 +375,34 @@ function U:InitRow(row, data)
         row.value:SetText(color(MUTED, data.unitCost and "" or "no cost"))
     end
     row.sel:SetShown(data.id == U.selected)
+    U.Meter(row.meter, data.activity)
+end
+
+local METER = { { .85, .40, .35 }, { .90, .75, .30 }, { .55, .80, .30 }, { .30, .76, .30 } }
+function U.Meter(bars, activity)
+    local rank = activity and activity.level and activity.level.rank or 0
+    for i, bar in ipairs(bars) do
+        if i <= rank then
+            local c = METER[rank]
+            bar:SetColorTexture(c[1], c[2], c[3], 1)
+        else
+            bar:SetColorTexture(1, 1, 1, .14)
+        end
+    end
+end
+
+-- Activity summary lines for tooltips.
+function U:ActivityLines(tip, act, profitUnit, perDay)
+    if not act or not act.level then
+        local n = act and act.points or 0
+        tip:AddLine(n == 0 and "Market: never scanned" or "Market: scan again later to see it move", .6, .6, .6)
+        return
+    end
+    tip:AddLine("Market: " .. act.level.label .. string.format(" (listed count changed in %d of %d rescans)", act.changes, act.rescans), 1, 1, 1)
+    if act.soldPerDay then
+        tip:AddLine(string.format("About %s units leave the AH a day", count(math.floor(act.soldPerDay + 0.5))), .8, .8, .8)
+    end
+    if perDay then tip:AddLine("If you list first: " .. Money(perDay, true, true) .. " a day", 1, 1, 1) end
 end
 
 -- Small "label / value" stat block.
@@ -347,10 +420,6 @@ local function stat(parent, x, y, w, label)
     return { label = l, value = v, sub = s }
 end
 
-local function count(n)
-    if not M.Number(n) then return "?" end
-    return BreakUpLargeNumbers and BreakUpLargeNumbers(n) or tostring(n)
-end
 
 -- Clickable text tab (for the market/ladder switch).
 local function textTab(parent, label, onClick)
@@ -449,7 +518,8 @@ function U:BuildDetail(body)
     priceSub:SetWidth(152)
     self.priceSub = priceSub
 
-    -- Plan inputs
+    -- Plan inputs. Your standing with the vendor comes from the game, so
+    -- there's no standing menu.
     y = -92
     local stackBox = labeled(content, "stackSize", "input", "Stack size", 0, y, 50)
     bindInput(stackBox, function(v) U:SetPlan("stackSize", tonumber(v) and math.max(1, math.floor(tonumber(v))) or nil) end,
@@ -464,21 +534,14 @@ function U:BuildDetail(body)
                 function() U:SetPlan("duration", i) end, i)
         end
     end)
-    local standing = labeled(content, "standing", "dropdown", "Buy at standing", 206, y, 100)
-    standing:SetupMenu(function(_, root)
-        for _, s in ipairs(M.TIERS) do
-            root:CreateRadio(s.label, function() return U.current and M.Tier(U.current.standing) == s end,
-                function() U:SetPlan("standing", s.reaction) end, s.reaction)
-        end
-    end)
     local costLabel = text(content, "GameFontNormalSmall")
-    costLabel:SetPoint("TOPLEFT", 314, y)
+    costLabel:SetPoint("TOPLEFT", 206, y)
     costLabel:SetText("Cost override / unit")
     local cost = U.MoneyInput(content, function(parent, i) return control(parent, "cost" .. i, "input") end,
         function(copper) U:SetPlan("cost", copper) end)
-    cost:SetPoint("TOPLEFT", 314, y - 13)
-    local reset = button(content, "reset-price", "Reset", 60)
-    reset:SetPoint("TOPLEFT", 472, y - 13)
+    cost:SetPoint("TOPLEFT", 206, y - 13)
+    local reset = button(content, "reset-price", "Reset price", 84)
+    reset:SetPoint("TOPLEFT", 380, y - 13)
     reset:SetScript("OnClick", function() U:SetPlan("price", nil) end)
     reset:SetScript("OnEnter", function(self)
         if not GameTooltip then return end
@@ -488,69 +551,43 @@ function U:BuildDetail(body)
         GameTooltip:Show()
     end)
     reset:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
-    self.inputs = { stackSize = stackBox, stacks = stacksBox, duration = duration, standing = standing, price = price, cost = cost }
+    self.inputs = { stackSize = stackBox, stacks = stacksBox, duration = duration, price = price, cost = cost }
 
-    -- Faction vs neutral cards
+    -- Hovering the cost explains the standing it assumes.
+    local costHover = CreateFrame("Frame", nil, content)
+    costHover:SetPoint("TOPLEFT", 124, -42)
+    costHover:SetSize(118, 40)
+    costHover:EnableMouse(true)
+    costHover:SetScript("OnEnter", function(self) U:CostTooltip(self) end)
+    costHover:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+
+    -- Cards: faction AH, then the neutral AH (opt-in) or how busy the market is.
     y = -138
     self.cards = {}
-    for i, venue in ipairs(M.VENUES) do
-        local card = section(content)
-        card:SetPoint("TOPLEFT", (i - 1) * 270, y)
-        card:SetSize(262, 80)
-        local strip = card:CreateTexture(nil, "ARTWORK")
+    local function card(x, rgb)
+        local f = section(content)
+        f:SetPoint("TOPLEFT", x, y)
+        f:SetSize(262, 80)
+        local strip = f:CreateTexture(nil, "ARTWORK")
         strip:SetPoint("TOPLEFT", 3, -3)
         strip:SetPoint("BOTTOMLEFT", 3, 3)
         strip:SetWidth(3)
-        local c = venue == "faction" and FACTION_COLOR or NEUTRAL_COLOR
-        strip:SetColorTexture(c[1], c[2], c[3], 1)
-        local head = text(card, "GameFontNormalSmall")
-        head:SetPoint("TOPLEFT", 12, -7)
-        head:SetPoint("RIGHT", -8, 0)
-        local profit = text(card, "GameFontHighlightLarge")
-        profit:SetPoint("TOPLEFT", 12, -21)
-        profit:SetPoint("RIGHT", -8, 0)
-        local line1 = text(card, "GameFontHighlightSmall")
-        line1:SetPoint("TOPLEFT", 12, -41)
-        line1:SetPoint("RIGHT", -8, 0)
-        local line2 = text(card, "GameFontDisableSmall")
-        line2:SetPoint("TOPLEFT", 12, -54)
-        line2:SetPoint("RIGHT", -8, 0)
-        local line3 = text(card, "GameFontDisableSmall")
-        line3:SetPoint("TOPLEFT", 12, -66)
-        line3:SetPoint("RIGHT", -8, 0)
-        self.cards[venue] = { frame = card, head = head, profit = profit, line1 = line1, line2 = line2, line3 = line3 }
+        strip:SetColorTexture(rgb[1], rgb[2], rgb[3], 1)
+        local c = { frame = f, strip = strip }
+        c.head = text(f, "GameFontNormalSmall"); c.head:SetPoint("TOPLEFT", 12, -7); c.head:SetPoint("RIGHT", -8, 0)
+        c.profit = text(f, "GameFontHighlightLarge"); c.profit:SetPoint("TOPLEFT", 12, -21); c.profit:SetPoint("RIGHT", -8, 0)
+        c.line1 = text(f, "GameFontHighlightSmall"); c.line1:SetPoint("TOPLEFT", 12, -41); c.line1:SetPoint("RIGHT", -8, 0)
+        c.line2 = text(f, "GameFontDisableSmall"); c.line2:SetPoint("TOPLEFT", 12, -54); c.line2:SetPoint("RIGHT", -8, 0)
+        c.line3 = text(f, "GameFontDisableSmall"); c.line3:SetPoint("TOPLEFT", 12, -66); c.line3:SetPoint("RIGHT", -8, 0)
+        return c
     end
+    self.cards.faction = card(0, FACTION_COLOR)
+    self.cards.neutral = card(270, NEUTRAL_COLOR)
+    self.activityCard = card(270, { .91, .74, .33 })
 
-    -- Reputation table
+    -- Bottom left: lowest price and units listed over time.
     y = -226
-    local repTitle = text(content, "GameFontNormalSmall")
-    repTitle:SetPoint("TOPLEFT", 0, y)
-    repTitle:SetText("Profit per unit, by standing")
-    self.repTitle = repTitle
-    self.repRows = {}
-    for i = 0, #M.TIERS do
-        local r = {}
-        local rowY = y - 16 - i * ROW_H
-        local font = i == 0 and "GameFontDisableSmall" or "GameFontHighlightSmall"
-        r.name = text(content, font)
-        r.name:SetPoint("TOPLEFT", 0, rowY); r.name:SetWidth(76)
-        r.cost = text(content, font)
-        r.cost:SetPoint("TOPLEFT", 76, rowY); r.cost:SetWidth(54); r.cost:SetJustifyH("RIGHT")
-        r.faction = text(content, font)
-        r.faction:SetPoint("TOPLEFT", 134, rowY); r.faction:SetWidth(62); r.faction:SetJustifyH("RIGHT")
-        r.neutral = text(content, font)
-        r.neutral:SetPoint("TOPLEFT", 198, rowY); r.neutral:SetWidth(62); r.neutral:SetJustifyH("RIGHT")
-        self.repRows[i] = r
-    end
-    self.repRows[0].name:SetText("Standing")
-    self.repRows[0].cost:SetText("Cost")
-    self.repRows[0].faction:SetText("Faction")
-    self.repRows[0].neutral:SetText("Neutral")
-    local repNote = text(content, "GameFontDisableSmall")
-    repNote:SetPoint("TOPLEFT", 0, y - 16 - (#M.TIERS + 1) * ROW_H - 4)
-    repNote:SetWidth(262)
-    repNote:SetWordWrap(true)
-    self.repNote = repNote
+    self:BuildChart(content, 0, y)
 
     -- Right table: live market depth, or the price ladder.
     local lx = 270
@@ -569,10 +606,10 @@ function U:BuildDetail(body)
     local h2 = text(content, "GameFontDisableSmall")
     h2:SetPoint("TOPLEFT", lx + 76, y - 16); h2:SetWidth(42); h2:SetJustifyH("RIGHT")
     local hf = text(content, "GameFontDisableSmall")
-    hf:SetPoint("TOPLEFT", lx + 120, y - 16); hf:SetWidth(68); hf:SetJustifyH("RIGHT"); hf:SetText("Faction")
+    hf:SetPoint("TOPLEFT", lx + 120, y - 16); hf:SetWidth(68); hf:SetJustifyH("RIGHT")
     local hn = text(content, "GameFontDisableSmall")
     hn:SetPoint("TOPLEFT", lx + 190, y - 16); hn:SetWidth(68); hn:SetJustifyH("RIGHT"); hn:SetText("Neutral")
-    self.tableHeads = { h1, h2 }
+    self.tableHeads = { h1, h2, hf, hn }
     local note = text(content, "GameFontDisableSmall")
     note:SetPoint("TOPLEFT", lx, y - 34)
     note:SetWidth(260)
@@ -599,28 +636,213 @@ function U:BuildDetail(body)
     end
 end
 
-function U:RowTooltip(b)
-    local row = b.row
-    if not row or not GameTooltip then return end
-    GameTooltip:SetOwner(b, "ANCHOR_RIGHT")
-    GameTooltip:AddLine(Money(row.price) .. " per unit")
-    if row.undercuts then
-        local l = row.undercuts
-        local others = l.qty - (l.mine or 0)
-        GameTooltip:AddLine(string.format("1c under %s at %s%s", count(others), Money(l.price),
-            l.seller and (" (" .. l.seller .. ")") or (l.sellers and l.sellers > 1 and (" (" .. l.sellers .. " sellers)") or "")), 1, 1, 1)
-        GameTooltip:AddLine(row.ahead == 0 and "Nothing cheaper: yours sell first." or (count(row.ahead) .. " units sell before yours."), .8, .8, .8)
+---------------------------------------------------------------------------
+-- Price and volume chart
+---------------------------------------------------------------------------
+local CHART_W, CHART_H, CHART_BUCKETS = 262, 132, 44
+
+-- A line between two points, or a dot at the end point where the client
+-- has no Line regions.
+local function segment(parent, pool, i)
+    local seg = pool[i]
+    if not seg then
+        local ok, line = false, nil
+        if parent.CreateLine then ok, line = pcall(parent.CreateLine, parent, nil, "OVERLAY") end
+        if ok and type(line) == "table" and line.SetStartPoint then
+            seg = line
+            seg:SetThickness(1.5)
+        else
+            seg = parent:CreateTexture(nil, "OVERLAY")
+            seg:SetSize(3, 3)
+        end
+        seg:SetColorTexture(.91, .74, .33, 1)
+        pool[i] = seg
     end
-    if row.faction then
-        for _, venue in ipairs(M.VENUES) do
-            local r = row[venue]
-            GameTooltip:AddDoubleLine((venue == "faction" and "Faction" or "Neutral") .. " profit per unit",
-                Money(r.profitUnit, true, true), 1, 1, 1, 1, 1, 1)
-            GameTooltip:AddDoubleLine((venue == "faction" and "Faction" or "Neutral") .. " profit, all stacks",
-                Money(r.profitTotal, true, true), 1, 1, 1, 1, 1, 1)
+    return seg
+end
+
+function U:BuildChart(content, x, y)
+    local title = text(content, "GameFontNormalSmall")
+    title:SetPoint("TOPLEFT", x, y)
+    title:SetText("Price & volume")
+    local range = text(content, "GameFontDisableSmall")
+    range:SetPoint("TOPRIGHT", content, "TOPLEFT", x + CHART_W, y)
+    range:SetJustifyH("RIGHT")
+    local area = CreateFrame("Frame", nil, content)
+    area:SetPoint("TOPLEFT", x, y - 16)
+    area:SetSize(CHART_W, CHART_H)
+    local bg = area:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints()
+    bg:SetColorTexture(1, 1, 1, .03)
+    local base = area:CreateTexture(nil, "BORDER")
+    base:SetPoint("BOTTOMLEFT"); base:SetPoint("BOTTOMRIGHT"); base:SetHeight(1)
+    base:SetColorTexture(1, 1, 1, .12)
+    local qtyMax = text(area, "GameFontDisableSmall"); qtyMax:SetPoint("TOPLEFT", 3, -2)
+    local priceTop = text(area, "GameFontDisableSmall"); priceTop:SetPoint("TOPRIGHT", -3, -2); priceTop:SetJustifyH("RIGHT")
+    local priceBottom = text(area, "GameFontDisableSmall"); priceBottom:SetPoint("BOTTOMRIGHT", -3, 3); priceBottom:SetJustifyH("RIGHT")
+    local empty = text(area, "GameFontDisableSmall")
+    empty:SetPoint("CENTER")
+    empty:SetWidth(CHART_W - 30)
+    empty:SetWordWrap(true)
+    empty:SetJustifyH("CENTER")
+    local legend = text(content, "GameFontDisableSmall")
+    legend:SetPoint("TOPLEFT", x, y - 16 - CHART_H - 4)
+    legend:SetWidth(CHART_W)
+    local slot = CHART_W / CHART_BUCKETS
+    local columns = {}
+    for i = 1, CHART_BUCKETS do
+        local col = CreateFrame("Frame", nil, area)
+        col:SetPoint("BOTTOMLEFT", (i - 1) * slot, 0)
+        col:SetSize(slot, CHART_H)
+        col:EnableMouse(true)
+        col:SetScript("OnEnter", function(self) U:ChartTooltip(self) end)
+        col:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+        local bar = area:CreateTexture(nil, "ARTWORK")
+        bar:SetPoint("BOTTOMLEFT", (i - 1) * slot + 1, 1)
+        bar:SetWidth(math.max(1, slot - 2))
+        bar:SetColorTexture(.40, .62, .85, .55)
+        columns[i] = { frame = col, bar = bar }
+    end
+    self.chart = { area = area, range = range, qtyMax = qtyMax, priceTop = priceTop, priceBottom = priceBottom,
+        empty = empty, legend = legend, columns = columns, lines = {}, slot = slot }
+end
+
+function U:ChartTooltip(col)
+    local b = col.bucket
+    if not b or not b.n or not GameTooltip then return end
+    GameTooltip:SetOwner(col, "ANCHOR_TOP")
+    GameTooltip:AddLine(ago(time() - b.t))
+    GameTooltip:AddDoubleLine("Listed", count(b.q), 1, 1, 1, 1, 1, 1)
+    GameTooltip:AddDoubleLine("Lowest price", b.p and Money(b.p) or "none listed", 1, 1, 1, 1, 1, 1)
+    if b.n > 1 then GameTooltip:AddLine(b.n .. " scans", .6, .6, .6) end
+    GameTooltip:Show()
+end
+
+-- Span to draw: from the oldest point (at most 7 days back) to now, and at
+-- least an hour so a few quick scans don't fill the whole width.
+local function chartSpan(history, now)
+    local first = history[1] and history[1].t or now
+    local from = math.max(first, now - 7 * 86400)
+    if now - from < 3600 then from = now - 3600 end
+    return from, now
+end
+
+function U:RefreshChart(a)
+    local c, now = self.chart, time()
+    local history = a.history or {}
+    local from, to = chartSpan(history, now)
+    local buckets = M.Buckets(history, from, to, CHART_BUCKETS)
+    local maxQ, minP, maxP, points = 0, nil, nil, 0
+    for _, b in ipairs(buckets) do
+        if b.n then
+            points = points + 1
+            maxQ = math.max(maxQ, b.q)
+            if b.p then minP = math.min(minP or b.p, b.p); maxP = math.max(maxP or b.p, b.p) end
         end
     end
-    GameTooltip:AddLine("Click to use this as your price.", .6, .6, .6)
+    c.range:SetText(#history > 0 and ("since " .. ago(now - from)) or "")
+    c.empty:SetShown(#history < 2)
+    c.empty:SetText(#history == 0 and "No scans of this item yet. Scan it on the AH to start its history."
+        or "One scan so far. Scan again later to see the price and volume move.")
+    c.qtyMax:SetText(maxQ > 0 and (count(maxQ) .. " listed") or "")
+    c.priceTop:SetText(maxP and Money(maxP) or "")
+    c.priceBottom:SetText(minP and minP ~= maxP and Money(minP) or "")
+    local plotH = CHART_H - 18 -- room for the labels at the top
+    local lo, hi = minP or 0, maxP or 0
+    if hi - lo < 1 then lo, hi = lo - 1, hi + 1 end
+    local prev, used = nil, 0
+    for i, b in ipairs(buckets) do
+        local col = c.columns[i]
+        col.frame.bucket = b
+        if b.n and b.q > 0 and maxQ > 0 then
+            col.bar:SetHeight(math.max(1, math.floor(plotH * b.q / maxQ)))
+            col.bar:Show()
+        else
+            col.bar:Hide()
+        end
+        if b.n and b.p then
+            local px = (i - 0.5) * c.slot
+            local py = 4 + (plotH - 8) * (b.p - lo) / (hi - lo)
+            used = used + 1
+            local seg = segment(c.area, c.lines, used)
+            if seg.SetStartPoint then
+                -- The first point gets a short tick so a lone price still shows.
+                local sx, sy = prev and prev[1] or px - 2, prev and prev[2] or py
+                seg:SetStartPoint("BOTTOMLEFT", c.area, sx, sy)
+                seg:SetEndPoint("BOTTOMLEFT", c.area, prev and px or px + 2, py)
+            else
+                seg:ClearAllPoints()
+                seg:SetPoint("CENTER", c.area, "BOTTOMLEFT", px, py)
+            end
+            seg:Show()
+            prev = { px, py }
+        end
+    end
+    for i = used + 1, #c.lines do c.lines[i]:Hide() end
+    c.legend:SetText(color("ff66a0d9", "Bars") .. color(MUTED, ": units listed   ") .. color(ACCENT, "Line") ..
+        color(MUTED, ": lowest price   " .. #history .. " scans"))
+end
+
+---------------------------------------------------------------------------
+-- Tooltips
+---------------------------------------------------------------------------
+function U:CostTooltip(owner)
+    local a = self.current
+    if not a or not GameTooltip then return end
+    GameTooltip:SetOwner(owner, "ANCHOR_TOP")
+    GameTooltip:AddLine("Your cost per unit")
+    if a.costOverride then
+        GameTooltip:AddLine("Your cost override. Clear it to use the vendor price.", 1, 1, 1, true)
+    elseif a.vendor then
+        local s = M.STANDING_BY_REACTION[a.standing]
+        GameTooltip:AddLine(string.format("%s with %s%s.", s and s.label or "Neutral", a.vendor.npc or "the vendor",
+            a.standingTime and (", seen " .. ago(time() - a.standingTime)) or ""), 1, 1, 1, true)
+        local d = M.Discount(a.rules, a.standing)
+        GameTooltip:AddLine(d > 0 and (d .. "% off the list price of " .. Money(a.baseUnit) .. ".")
+            or ("Full list price. Honored and above get " .. M.Discount(a.rules, 6) .. "% off."), .8, .8, .8, true)
+        local up = a.byStanding and a.byStanding[2]
+        if up and M.Tier(a.standing) ~= M.TIERS[2] then
+            GameTooltip:AddDoubleLine("At Honored you'd pay", Money(up.unitCost), .8, .8, .8, 1, 1, 1)
+        end
+        GameTooltip:AddLine("Updates when you visit, target or mouse over the vendor.", .6, .6, .6, true)
+    else
+        GameTooltip:AddLine("Open this item's vendor to record its price.", 1, 1, 1, true)
+    end
+    if a.paidUnit then GameTooltip:AddDoubleLine("You last paid", Money(a.paidUnit), .8, .8, .8, 1, 1, 1) end
+    GameTooltip:Show()
+end
+
+function U:RowTooltip(b)
+    local row, a = b.row, self.current
+    if not row or not GameTooltip or not a then return end
+    GameTooltip:SetOwner(b, "ANCHOR_RIGHT")
+    local venues = a.showNeutral and M.VENUES or { "faction" }
+    local function profits(r)
+        if not r.faction then return end
+        for _, venue in ipairs(venues) do
+            local name = venue == "faction" and "Faction" or "Neutral"
+            GameTooltip:AddDoubleLine(name .. " profit per unit", Money(r[venue].profitUnit, true, true), 1, 1, 1, 1, 1, 1)
+            GameTooltip:AddDoubleLine(name .. " profit, all stacks", Money(r[venue].profitTotal, true, true), 1, 1, 1, 1, 1, 1)
+        end
+    end
+    if row.ghost then
+        GameTooltip:AddLine("Your listing: " .. count(row.qty) .. " at " .. Money(row.price))
+        GameTooltip:AddLine(row.ahead == 0 and "Nothing cheaper: yours sell first." or (count(row.ahead) .. " other units sell before yours."), 1, 1, 1)
+        profits(row)
+    elseif row.level then
+        local l = row.level
+        local who = l.seller and (" by " .. l.seller) or (l.sellers and l.sellers > 1 and (" by " .. l.sellers .. " sellers") or "")
+        GameTooltip:AddLine(count(l.qty) .. " listed at " .. Money(l.price) .. who)
+        if (l.mine or 0) > 0 then GameTooltip:AddLine(count(l.mine) .. " of them are yours", .8, .8, .8) end
+        GameTooltip:AddLine("Undercut at " .. Money(row.listAt) .. ": " ..
+            (row.ahead == 0 and "yours sell first." or (count(row.ahead) .. " units sell before yours.")), 1, 1, 1)
+        profits(row)
+        GameTooltip:AddLine("Click to list 1c under this price.", .6, .6, .6)
+    else
+        GameTooltip:AddLine(Money(row.price) .. " per unit")
+        profits(row)
+        GameTooltip:AddLine("Click to use this as your price.", .6, .6, .6)
+    end
     GameTooltip:Show()
 end
 
@@ -641,6 +863,22 @@ function U:InsertLink(link)
     self:Select(id)
 end
 function U:SetFilter(f) self.filter = f; self:RequestList() end
+
+function U:SetSort(value)
+    local ok, err = self.app:Set("listSort", value)
+    warn(self.app, ok, err)
+    self:RequestList()
+end
+
+-- Scan every item in the list, or stop a scan that's running.
+function U:ToggleScanList()
+    if P:QueueProgress() then P:StopQueue(); return end
+    local ids = {}
+    for _, row in ipairs(self.rows or {}) do ids[#ids + 1] = row.id end
+    if not P:StartQueue(ids) and UIErrorsFrame then
+        UIErrorsFrame:AddMessage(P.ahOpen and "Nothing to scan." or "Open the auction house to scan.", 1, .3, .3)
+    end
+end
 
 function U:Select(id)
     self.selected = id
@@ -695,18 +933,26 @@ function U:RequestList() if self.onListRequested then self.onListRequested() els
 
 function U:RefreshList()
     if not self.panel or not self.panel:IsShown() then return end
-    local rows = A.List(self.app, self.filter, self.query, ns.lastMerchant and ns.lastMerchant.npc, time())
+    local sort = self.app:Get("listSort")
+    local rows = A.List(self.app, self.filter, self.query, ns.lastMerchant and ns.lastMerchant.npc, time(), sort)
+    self.rows = rows
     if self.listBox and CreateDataProvider then
         self.listBox:SetDataProvider(CreateDataProvider(rows), ScrollBoxConstants and ScrollBoxConstants.RetainScrollPosition)
     end
     local where = ({ vendor = "vendor items", merchant = "from the last merchant", bags = "in your bags", all = "known items" })[self.filter]
-    self.count:SetText(#rows .. " " .. (where or "items") .. " · profit per unit")
+    self.count:SetText(#rows .. " " .. (where or "items") .. " · profit/unit")
+    local done, total = P:QueueProgress()
+    self.scanAllButton.label:SetText(done and ("Stop " .. done .. "/" .. total) or "Scan list")
+    self.scanAllButton:SetEnabled(P.ahOpen and (done ~= nil or #rows > 0))
     local sources = P:Available()
     local labels = {}
     for _, key in ipairs(sources) do labels[#labels + 1] = P.SOURCES[key].label end
     self.status:SetText((P.ahOpen and color(GOOD, "AH open") or color(MUTED, "AH closed")) ..
         (#labels > 0 and color(MUTED, " · " .. table.concat(labels, ", ")) or ""))
     self:CaptionFilter()
+    for _, o in ipairs(self.sorts or {}) do
+        if o.value == sort then self:Caption(self.sortDropdown, o.label) end
+    end
 end
 
 local function sourceLabel(entry)
@@ -768,8 +1014,8 @@ function U:RefreshDetail()
     if a.unitCost then
         s.cost.value:SetText(Money(a.unitCost))
         local d = M.Discount(a.rules, a.standing)
-        local basis = a.costOverride and "your override" or (M.Tier(a.standing).label .. (d > 0 and (", " .. d .. "% off") or ", full price"))
-        if a.paidUnit then basis = basis .. ", paid " .. Money(a.paidUnit) end
+        local sd = M.STANDING_BY_REACTION[a.standing]
+        local basis = a.costOverride and "your override" or ((sd and sd.label or "Neutral") .. (d > 0 and (", " .. d .. "% off") or ", full price"))
         s.cost.sub:SetText(basis)
     else
         s.cost.value:SetText(color(MUTED, "unknown"))
@@ -798,7 +1044,6 @@ function U:RefreshDetail()
     if a.ahead then priceNote = priceNote .. " · " .. (a.ahead == 0 and "sells first" or (count(a.ahead) .. " ahead")) end
     self.priceSub:SetText(priceNote)
     self:Caption(inputs.duration, U.DurationLabel(a.duration))
-    self:Caption(inputs.standing, M.Tier(a.standing).label)
 
     -- Cards
     local hours = M.DURATION_HOURS[a.duration]
@@ -826,34 +1071,39 @@ function U:RefreshDetail()
             card.line3:SetText("")
         end
     end
-
-    -- Standing table
-    self.repTitle:SetText("Profit per unit at " .. (a.price and Money(a.price) or "your price") .. ", by standing")
-    for i, sd in ipairs(M.TIERS) do
-        local r, row = self.repRows[i], a.byStanding and a.byStanding[i]
-        local mine = sd == M.Tier(a.standing)
-        r.name:SetText(mine and color(ACCENT, sd.label) or sd.label)
-        r.cost:SetText(row and Money(row.unitCost) or color(MUTED, "-"))
-        r.faction:SetText(row and row.faction and Money(row.faction.profitUnit, true, true) or color(MUTED, "-"))
-        r.neutral:SetText(row and row.neutral and Money(row.neutral.profitUnit, true, true) or color(MUTED, "-"))
-    end
-    local seen = a.vendor and a.vendor.reaction and select(1, D:Calibration(a.vendor.reaction))
-    if a.costOverride then
-        self.repNote:SetText("Using your cost override, so standing doesn't apply.")
-    elseif not a.baseUnit then
-        self.repNote:SetText("Open this item's vendor to record its price.")
-    else
-        local sv = M.STANDING_BY_REACTION[a.vendor.reaction or 4]
-        local note = "Price recorded at " .. (sv and sv.label or "Neutral")
-        if seen then note = note .. "; merchants there charged about " .. seen .. "% under list" end
-        self.repNote:SetText(note .. ". Edit discounts in Options.")
-    end
+    self.cards.neutral.frame:SetShown(a.showNeutral)
+    self.activityCard.frame:SetShown(not a.showNeutral)
+    self:RefreshActivity(a)
+    self:RefreshChart(a)
 
     self:RefreshTable(a)
 end
 
--- Right-hand table: where you'd sit in the AH queue at each price, or the
--- what-if ladder around your price.
+local ACTIVITY_COLOR = { busy = GOOD, active = "ff9ccc4c", slow = ACCENT, stagnant = BAD }
+
+-- How busy the market is, from the listed count across your scans.
+function U:RefreshActivity(a)
+    local c, act = self.activityCard, a.activity
+    c.head:SetText("Market activity · last 7 days")
+    if act and act.level then
+        local per = act.soldPerDay and ("  ~" .. count(math.floor(act.soldPerDay + 0.5)) .. " leave a day") or ""
+        c.profit:SetText(color(ACTIVITY_COLOR[act.key], act.level.label) .. color(MUTED, per))
+        c.line1:SetText(string.format("Listed count changed in %d of %d rescans", act.changes, act.rescans))
+        c.line2:SetText(a.perDay and ("If you list first: " .. Money(a.perDay, true, true) .. " a day")
+            or (act.soldPerDay and "" or "Scan again later to measure how fast it sells."))
+    else
+        local n = act and act.points or 0
+        c.profit:SetText(color(MUTED, n == 0 and "Not scanned yet" or "One scan so far"))
+        c.line1:SetText("Busy markets change between scans; quiet ones")
+        c.line2:SetText("sit still. Scan now and again to tell them apart.")
+    end
+    local last = act and act.last
+    c.line3:SetText(last and (count(last.q) .. " listed " .. ago(time() - last.t)) or "")
+end
+
+-- Right-hand table: the live market (each price level, how many are listed
+-- there, and profit if you undercut it, with a ghost row for your price), or
+-- the what-if ladder around your price.
 function U:RefreshTable(a)
     local mode = self.tableMode or (a.levels and "market" or "ladder")
     for key, tab in pairs(self.tableTabs) do
@@ -861,55 +1111,74 @@ function U:RefreshTable(a)
         tab.line:SetShown(on)
         tab.label:SetTextColor(on and 1 or .62, on and .82 or .6, on and .2 or .56)
     end
-    self.tablePer:SetText("profit per stack of " .. a.stackSize)
+    local neutral = a.showNeutral
+    local heads = self.tableHeads
+    heads[3]:SetText(neutral and "Faction" or "Profit")
+    heads[4]:SetShown(neutral)
     local rows, note = {}, nil
     if mode == "market" then
-        self.tableHeads[1]:SetText("List at")
-        self.tableHeads[2]:SetText("Ahead")
-        rows = a.positions or {}
+        self.tablePer:SetText("per stack of " .. a.stackSize .. ", 1c under")
+        heads[1]:SetText("Price")
+        heads[2]:SetText("Qty")
+        rows = a.marketRows or {}
         if not a.levels then
+            rows = {}
             note = P.ahOpen and "No listings recorded yet. Press Scan AH, or open this item on the AH Buy or Auctions page."
                 or "No listings recorded yet. Open the auction house and scan this item."
-        elseif #rows == 0 then
-            note = "Only your own auctions are listed. Set any price you like."
         elseif not a.plan then
             note = "Set a cost to see profit at each price."
         end
     else
-        self.tableHeads[1]:SetText("Price / unit")
-        self.tableHeads[2]:SetText("")
+        self.tablePer:SetText("profit per stack of " .. a.stackSize)
+        heads[1]:SetText("Price / unit")
+        heads[2]:SetText("")
         rows = a.ladder or {}
         if not a.plan then note = "Set a cost to see the ladder." end
     end
     self.tableNote:SetText(note or "")
     self.tableNote:SetShown(note ~= nil)
 
+    local function best(row)
+        if not row.faction then return nil end
+        return neutral and math.max(row.faction.profit, row.neutral.profit) or row.faction.profit
+    end
     local maxAbs = 1
     for _, row in ipairs(rows) do
-        if row.faction then maxAbs = math.max(maxAbs, math.abs(row.faction.profit), math.abs(row.neutral.profit)) end
+        local b = best(row)
+        if b then maxAbs = math.max(maxAbs, math.abs(b)) end
     end
     local offset = note and 3 or 0 -- leave room for the note
     for i, l in ipairs(self.ladder) do
         local row = i > offset and rows[i - offset] or nil
         l.button:SetShown(row ~= nil)
         if row then
-            l.button.row, l.button.price = row, row.price
+            l.button.row = row
             local tag = row.tags and row.tags[1]
-            local current = a.price and row.price == a.price
             if mode == "market" then
-                l.price:SetText(Money(row.price))
-                l.second:SetText(row.ahead == 0 and color(GOOD, "0") or count(row.ahead))
+                l.button.price = (not row.ghost) and row.listAt or nil
+                if row.ghost then
+                    l.price:SetText(color(ACCENT, "> ") .. Money(row.price))
+                    l.second:SetText(color(ACCENT, count(row.qty)))
+                else
+                    l.price:SetText(Money(row.price))
+                    l.second:SetText(count(row.qty) .. (row.mine > 0 and color(ACCENT, "*") or ""))
+                end
+                l.mark:SetShown(row.ghost == true)
+                l.mark:SetColorTexture(.91, .74, .33, row.ghost and .22 or .14)
             else
+                l.button.price = row.price
                 l.price:SetText(Money(row.price) .. (tag and color(ACCENT, " " .. tag) or ""))
                 l.second:SetText("")
+                l.mark:SetShown((a.price and row.price == a.price) or tag ~= nil)
+                l.mark:SetColorTexture(.91, .74, .33, .14)
             end
             l.faction:SetText(row.faction and Money(row.faction.profit, true, true) or color(MUTED, "-"))
             l.neutral:SetText(row.neutral and Money(row.neutral.profit, true, true) or color(MUTED, "-"))
-            l.mark:SetShown(current or (mode == "ladder" and tag ~= nil))
-            if row.faction then
-                local best = math.max(row.faction.profit, row.neutral.profit)
-                l.bar:SetWidth(math.max(1, math.floor(136 * math.min(1, math.abs(best) / maxAbs))))
-                if best >= 0 then l.bar:SetColorTexture(.05, .64, .05, .22) else l.bar:SetColorTexture(.82, .23, .23, .22) end
+            l.neutral:SetShown(neutral)
+            local b = best(row)
+            if b then
+                l.bar:SetWidth(math.max(1, math.floor((neutral and 136 or 68) * math.min(1, math.abs(b) / maxAbs))))
+                if b >= 0 then l.bar:SetColorTexture(.05, .64, .05, .22) else l.bar:SetColorTexture(.82, .23, .23, .22) end
                 l.bar:Show()
             else
                 l.bar:Hide()

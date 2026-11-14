@@ -207,6 +207,54 @@ test("positions: 1c under each level, with profit", function()
     assert(#M.Positions(levels, nil, 2) == 2 and M.Positions(levels)[1].faction == nil)
 end)
 
+test("market rows: quantity at each level, and a ghost for your price", function()
+    local levels = M.Levels(queue) -- 96 x77, 98 x1187 (7 yours), 99 x16, 102 x471
+    local rows = M.MarketRows(levels, plan(60), 98, 20)
+    assert(#rows == 5)
+    assert(rows[1].price == 96 and rows[1].qty == 77 and rows[1].listAt == 95 and rows[1].ahead == 0)
+    assert(rows[2].price == 98 and rows[2].qty == 1187 and rows[2].mine == 7)
+    assert(rows[3].ghost and rows[3].price == 98 and rows[3].qty == 20, "ghost queues behind the 98c units")
+    assert(rows[3].ahead == 77 + 1180 and rows[3].faction, "others at or under your price sell first")
+    assert(rows[4].price == 99 and rows[5].price == 102)
+    local first = M.MarketRows(levels, nil, 90, 5)
+    assert(first[1].ghost and first[1].ahead == 0 and first[1].faction == nil)
+    -- A long market keeps the ghost visible when trimmed.
+    local trimmed = M.MarketRows(levels, nil, 200, 5, 3)
+    assert(#trimmed == 3 and trimmed[3].ghost and trimmed[1].price == 96 and trimmed[2].price == 98)
+    assert(#M.MarketRows(levels, nil, nil) == 4, "no price, no ghost")
+end)
+
+test("activity: a listed count that moves is a busy market", function()
+    local now = 1000000
+    local function hist(qs, step)
+        local h = {}
+        for i, q in ipairs(qs) do h[i] = { t = now - (#qs - i) * step, p = 20, q = q } end
+        return h
+    end
+    local busy = M.Activity(hist({ 525, 510, 498, 530, 512, 505 }, 1800), now, 7)
+    assert(busy.key == "busy" and busy.rescans == 5 and busy.changes == 5 and busy.confident)
+    -- drops: 15 + 12 + 18 + 7 = 52 over 2.5h
+    near(busy.soldPerDay, 52 / 9000 * 86400, 1e-6, "units leaving per day")
+    local still = M.Activity(hist({ 61, 61, 61, 61 }, 7200), now, 7)
+    assert(still.key == "stagnant" and still.changeRate == 0)
+    local quick = M.Activity(hist({ 61, 61, 61 }, 30), now, 7)
+    assert(quick.key == "slow", "a minute of no change isn't stagnant")
+    local slow = M.Activity(hist({ 68, 68, 67, 67, 67 }, 3600), now, 7)
+    assert(slow.key == "slow")
+    assert(M.Activity(hist({ 10 }, 60), now, 7).key == nil, "one scan says nothing")
+    assert(M.Activity({ { t = now - 30 * 86400, q = 5 }, { t = now - 29 * 86400, q = 1 } }, now, 7).points == 0, "old points ignored")
+    near(M.ProfitPerDay(10, busy, 20), 200, 1e-9, "capped at what you list")
+    near(M.ProfitPerDay(10, { soldPerDay = 3 }, 20), 30, 1e-9)
+    assert(M.ProfitPerDay(10, still, 20) == 0, "nothing left the market")
+    assert(M.ProfitPerDay(10, quick, 20) == nil, "too short to measure")
+end)
+
+test("chart buckets keep the last count and lowest price", function()
+    local b = M.Buckets({ { t = 0, p = 30, q = 5 }, { t = 10, p = 25, q = 7 }, { t = 60, p = 40, q = 2 } }, 0, 100, 4)
+    assert(#b == 4 and b[1].q == 7 and b[1].p == 25 and b[1].n == 2)
+    assert(b[2].n == nil and b[3].q == 2 and b[3].p == 40 and b[4].n == nil)
+end)
+
 test("sale profit and quotes", function()
     -- 13 Fine Thread sold for 12s 74c gross at 5%; paid 90c each.
     local r = M.SaleProfit(1274, 13, 90, 0.05)
