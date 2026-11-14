@@ -68,6 +68,29 @@ function A.BagCount(id)
     return n
 end
 
+-- Every vendor seen selling an item, best first: cheapest at your standing
+-- with each (as the game last reported it; the price may have been seen
+-- before you ranked up), then the one you stand best with, then unlimited
+-- stock, then the one seen most recently.
+function A.Offers(rules, vendors)
+    local list = {}
+    for _, v in pairs(vendors or {}) do
+        local current, seenAt = D:Standing(v.npc)
+        local standing = current or v.reaction or 4
+        local base = M.BaseUnitPrice(rules, v.price / v.qty, v.reaction or 4)
+        list[#list + 1] = { vendor = v, standing = standing, standingTime = seenAt or v.time, base = base,
+            cost = M.UnitCostAt(rules, base, standing) }
+    end
+    table.sort(list, function(a, b)
+        if math.abs(a.cost - b.cost) > 1e-6 then return a.cost < b.cost end
+        if a.standing ~= b.standing then return a.standing > b.standing end
+        if (a.vendor.limited == true) ~= (b.vendor.limited == true) then return not a.vendor.limited end
+        if (a.vendor.time or 0) ~= (b.vendor.time or 0) then return (a.vendor.time or 0) > (b.vendor.time or 0) end
+        return (a.vendor.npc or "") < (b.vendor.npc or "")
+    end)
+    return list
+end
+
 -- Full analysis for one item.
 function A.Item(app, id, now)
     now = now or time()
@@ -75,18 +98,17 @@ function A.Item(app, id, now)
     local info = A.Info(id)
     local saved = D:Item(id)
     local plan = D:Plan(id)
-    local vendor = saved and saved.vendor
+    local offers = A.Offers(rules, D:Vendors(id))
+    local pick = offers[1]
+    local vendor = pick and pick.vendor
 
-    local out = { id = id, info = info, rules = rules, vendor = vendor }
-    if vendor then
+    local out = { id = id, info = info, rules = rules, vendor = vendor, offers = offers }
+    if pick then
         out.observedUnit = vendor.price / vendor.qty
-        out.baseUnit = M.BaseUnitPrice(rules, out.observedUnit, vendor.reaction or 4)
+        out.baseUnit = pick.base
     end
-    -- Your standing with this vendor as the game last reported it; the
-    -- price was recorded at vendor.reaction, possibly before you ranked up.
-    local current, seenAt = D:Standing(vendor and vendor.npc)
-    out.standing = current or (vendor and vendor.reaction) or 4
-    out.standingTime = seenAt or (vendor and vendor.time)
+    out.standing = pick and pick.standing or 4
+    out.standingTime = pick and pick.standingTime
     out.costOverride = M.Number(plan.cost) and plan.cost or nil
     if out.costOverride then
         out.unitCost = out.costOverride
@@ -286,7 +308,8 @@ function A.List(app, filter, query, merchantName, now, sort)
     end
     if filter ~= "bags" and db then
         for id, item in pairs(db.items) do
-            if filter == "all" or (item.vendor and (filter ~= "merchant" or item.vendor.npc == merchantName)) then
+            local vendors = D:Vendors(id)
+            if filter == "all" or (next(vendors) and (filter ~= "merchant" or (merchantName and vendors[merchantName]))) then
                 candidates[id] = true
             end
         end

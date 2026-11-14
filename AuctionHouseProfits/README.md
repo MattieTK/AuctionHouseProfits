@@ -34,7 +34,7 @@ Select one of your items on Blizzard's **Auctions** tab and a strip appears in t
 
 ## How it learns prices
 
-- **Vendor prices:** open any merchant and the add-on records what they charge and your standing with them. Turn this off in Options.
+- **Vendor prices:** open any merchant and the add-on records what they charge and your standing with them. Turn this off in Options. Goods sold by many vendors keep every vendor. Costs use the one that's cheapest at your standing, which normally means the vendor you're on the best terms with. Hover **Your cost** to see them all.
 - **Market prices:** with the AH open, selecting an item runs one price search, or press **Scan AH**. **Scan list** searches every item in the list in turn. Searches you run on the Buy or Auctions pages, or through Auctionator, update the recorded listings and history too. Nothing scans in the background.
 - **Sorting:** the list puts profitable, busy markets first (**Profit per day**). Items without enough scans to judge come next, by profit per unit. The bars beside each profit show how busy its market is. You can also sort by **Profit per unit** or **Busiest markets**. Prices from Auctionator, TSM or Auctioneer are used automatically when those add-ons are installed.
 - **What you paid:** buying from a merchant records the price once the money leaves your bags. Sold auctions use it for profit; otherwise the vendor price at your standing.

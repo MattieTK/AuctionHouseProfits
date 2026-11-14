@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.2
+
+- **Items sold by many vendors keep every vendor,** not just the last one you visited. Costs use the vendor that's cheapest at your current standing with each. List prices are normally the same, so that's the vendor you're on the best terms with: Honored with one city beats Friendly with another. On a tie it prefers unlimited stock, then the vendor seen most recently.
+- Hover **Your cost** to see every vendor with your standing and price there. The item header says how many other vendors sell it.
+- The "Last merchant" filter includes items that merchant sells even when another vendor is cheaper.
+
 ## 0.3.1
 
 - **Demand is measured from what was bought, not from the listed count moving.** Each scan now keeps the order book: units at each price. Buyers always take the cheapest first, so units gone from the cheap end were bought. Units gone from dearer prices while cheaper ones were untouched were cancelled or expired. Anything new is supply. A market that only gains listings is now Stagnant, not Busy. A steady market whose cheap end keeps selling and refilling is Busy, even if its total barely moves.

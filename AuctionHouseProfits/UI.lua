@@ -846,7 +846,18 @@ function U:CostTooltip(owner)
         if up and M.Tier(a.standing) ~= M.TIERS[2] then
             GameTooltip:AddDoubleLine("At Honored you'd pay", Money(up.unitCost), .8, .8, .8, 1, 1, 1)
         end
-        GameTooltip:AddLine("Updates when you visit, target or mouse over the vendor.", .6, .6, .6, true)
+        if #a.offers > 1 then
+            GameTooltip:AddLine(" ")
+            GameTooltip:AddLine("Vendors you've seen selling it (cheapest at your standing first):", .8, .8, .8, true)
+            for i, o in ipairs(a.offers) do
+                if i > 6 then GameTooltip:AddLine("and " .. (#a.offers - 6) .. " more", .6, .6, .6); break end
+                local st = M.STANDING_BY_REACTION[o.standing]
+                local name = (o.vendor.npc or "Unknown vendor") .. (o.vendor.zone and (", " .. o.vendor.zone) or "")
+                GameTooltip:AddDoubleLine((i == 1 and "> " or "") .. name .. " (" .. (st and st.label or "Neutral") .. ")",
+                    Money(o.cost), i == 1 and 1 or .8, i == 1 and .82 or .8, i == 1 and 0 or .8, 1, 1, 1)
+            end
+        end
+        GameTooltip:AddLine("Standing updates when you visit, target or mouse over a vendor.", .6, .6, .6, true)
     else
         GameTooltip:AddLine("Open this item's vendor to record its price.", 1, 1, 1, true)
     end
@@ -1026,6 +1037,8 @@ function U:RefreshDetail()
         if a.vendor.zone then who = who .. ", " .. a.vendor.zone end
         subParts[#subParts + 1] = "Sold by " .. who
         if a.vendor.limited then subParts[#subParts + 1] = "limited supply" end
+        local others = #a.offers - 1
+        if others > 0 then subParts[#subParts + 1] = others .. (others == 1 and " other vendor" or " other vendors") end
     else
         subParts[#subParts + 1] = "Item " .. id .. ", no vendor recorded"
     end

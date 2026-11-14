@@ -44,16 +44,29 @@ local function validLevels(levels)
     return out
 end
 
+local UNKNOWN_VENDOR = "?"
+local function validOffer(v)
+    return type(v) == "table" and M.Number(v.price) and M.Number(v.qty) and v.qty > 0
+end
+
 -- Drop malformed records instead of erroring later in the UI.
 local function sanitize(db, now)
     for _, key in ipairs(TABLES) do
         if type(db[key]) ~= "table" then db[key] = {} end
     end
     for id, item in pairs(db.items) do
-        if not isID(id) or type(item) ~= "table" then db.items[id] = nil
-        elseif item.vendor ~= nil and (type(item.vendor) ~= "table" or not M.Number(item.vendor.price)
-            or not M.Number(item.vendor.qty) or item.vendor.qty <= 0) then
-            item.vendor = nil
+        if not isID(id) or type(item) ~= "table" then
+            db.items[id] = nil
+        else
+            if item.vendor ~= nil and not validOffer(item.vendor) then item.vendor = nil end
+            if type(item.vendors) ~= "table" then item.vendors = nil end
+            for key, v in pairs(item.vendors or {}) do
+                if type(key) ~= "string" or not validOffer(v) then item.vendors[key] = nil end
+            end
+            -- Before 0.3.2 only the last merchant was kept.
+            if item.vendor and not (item.vendors and next(item.vendors)) then
+                item.vendors = { [item.vendor.npc or UNKNOWN_VENDOR] = item.vendor }
+            end
         end
     end
     for id, scan in pairs(db.scans) do
@@ -148,14 +161,26 @@ function D:RememberInfo(id, info)
     self:Touch()
 end
 
+-- Every merchant seen selling an item, by name. item.vendor stays the one
+-- seen last (what 0.3.1 and earlier read).
 function D:RecordVendor(id, offer)
     if self.readOnly or not isID(id) then return end
     local item = self:EnsureItem(id)
-    item.vendor = {
+    local entry = {
         price = offer.price, qty = offer.qty, reaction = offer.reaction, npc = offer.npc,
         zone = offer.zone, limited = offer.limited or nil, time = offer.time,
     }
+    item.vendor = entry
+    item.vendors = item.vendors or {}
+    item.vendors[offer.npc or UNKNOWN_VENDOR] = entry
     self:Touch()
+end
+
+function D:Vendors(id)
+    local item = self.db and self.db.items[id]
+    if not item then return {} end
+    if item.vendors then return item.vendors end
+    return item.vendor and { [item.vendor.npc or UNKNOWN_VENDOR] = item.vendor } or {}
 end
 
 -- One point per search for the price/volume history, with the order book
@@ -294,5 +319,5 @@ function D:IsVendor(npc) return npc ~= nil and self.db ~= nil and self.db.standi
 
 function D:ForgetVendor(id)
     local item = self.db and self.db.items[id]
-    if item and not self.readOnly then item.vendor = nil; self:Touch() end
+    if item and not self.readOnly then item.vendor, item.vendors = nil, nil; self:Touch() end
 end

@@ -229,6 +229,40 @@ test("targeting or mousing over a vendor refreshes your standing with them", fun
     UnitName, UnitReaction = name, reaction
 end)
 
+test("an item sold by several vendors is costed at the one you stand best with", function()
+    local name, reaction = UnitName, UnitReaction
+    -- Grub sells Coarse Thread at its 8c list price: you're only Friendly there.
+    local saved = MERCHANT
+    MERCHANT = { { id = 2320, info = { name = "Coarse Thread", price = 8, stackCount = 1, numAvailable = -1, hasExtendedCost = false } } }
+    UnitName = function(u) if u == "npc" or u == "mouseover" then return "Grub" end end
+    UnitReaction = function() return 5 end
+    W.event("MERCHANT_SHOW"); settle()
+    local item = AuctionHouseProfitsData.items[2320]
+    assert(item.vendors.Grub and item.vendors.Tamar, "both vendors kept")
+    local a = ns.Analysis.Item(ns.App, 2320, os.time())
+    assert(a.vendor.npc == "Tamar" and math.abs(a.unitCost - 7) < 1e-9 and #a.offers == 2, "Honored at Tamar: 7c")
+    -- Reach Honored with Grub as well: 8c list less 10% beats Tamar's 7c? No: 7.2c.
+    UnitReaction = function() return 6 end
+    W.event("UPDATE_MOUSEOVER_UNIT"); settle()
+    a = ns.Analysis.Item(ns.App, 2320, os.time())
+    assert(a.vendor.npc == "Tamar", "still cheaper at Tamar")
+    -- Drop to Friendly with Tamar: Grub at Honored (7.2c) is now the better buy.
+    UnitName = function(u) if u == "mouseover" then return "Tamar" end end
+    UnitReaction = function() return 5 end
+    W.event("UPDATE_MOUSEOVER_UNIT"); settle()
+    a = ns.Analysis.Item(ns.App, 2320, os.time())
+    assert(a.vendor.npc == "Grub" and math.abs(a.unitCost - 7.2) < 1e-9, "switches to Grub")
+    local rows = ns.Analysis.List(ns.App, "merchant", "", "Grub", os.time())
+    assert(#rows == 1 and rows[1].id == 2320, "last-merchant filter knows every vendor")
+    rows = ns.Analysis.List(ns.App, "merchant", "", "Tamar", os.time())
+    assert(#rows == 3)
+    -- Back to Honored with Tamar for the rest of the run.
+    UnitReaction = function() return 6 end
+    W.event("UPDATE_MOUSEOVER_UNIT"); settle()
+    MERCHANT, UnitName, UnitReaction = saved, name, reaction
+    ns.lastMerchant = nil
+end)
+
 test("WoW Forever discounts: full price below Honored, 10% from Honored up", function()
     local rules = ns.Rules(ns.App)
     assert(rules.discounts[4] == 0 and rules.discounts[5] == 0)
