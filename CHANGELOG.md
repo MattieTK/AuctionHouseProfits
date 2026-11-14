@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1
+
+- **Demand is measured from what was bought, not from the listed count moving.** Each scan now keeps the order book: units at each price. Buyers always take the cheapest first, so units gone from the cheap end were bought. Units gone from dearer prices while cheaper ones were untouched were cancelled or expired. Anything new is supply. A market that only gains listings is now Stagnant, not Busy. A steady market whose cheap end keeps selling and refilling is Busy, even if its total barely moves.
+- Busy, Active and Slow are rated by how fast the market's stock sells (bought per day against units listed). Stagnant means nothing bought in 3+ hours of scans. A warning shows when supply piles up faster than it sells.
+- The chart shows units bought between scans in green.
+- Scans more than 8 hours apart aren't compared, because listings expire in that time. History from 0.3.0 has no order books, so ratings start over from your next scans.
+
 ## 0.3.0
 
 From in-game testing at the Undercity auction house.

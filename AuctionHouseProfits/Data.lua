@@ -70,7 +70,8 @@ local function sanitize(db, now)
             local kept = {}
             for _, h in ipairs(list) do
                 if type(h) == "table" and M.Number(h.t) and M.Number(h.q) and h.q >= 0
-                    and (h.p == nil or M.Number(h.p)) and (not now or h.t >= now - HISTORY_DAYS * 86400) then
+                    and (h.p == nil or M.Number(h.p)) and (h.d == nil or type(h.d) == "string")
+                    and (not now or h.t >= now - HISTORY_DAYS * 86400) then
                     kept[#kept + 1] = h
                 end
             end
@@ -157,14 +158,15 @@ function D:RecordVendor(id, offer)
     self:Touch()
 end
 
--- One point per search for the price/volume history. The several result
--- events one search fires (and quick re-reads) merge into a single point.
-function D:AddHistory(id, price, quantity, now)
+-- One point per search for the price/volume history, with the order book
+-- it saw (depth text from M.EncodeDepth) so demand can be told from supply.
+-- The several result events one search fires merge into a single point.
+function D:AddHistory(id, price, quantity, now, depth)
     if self.readOnly or not isID(id) or not M.Number(quantity) or not M.Number(now) then return end
     local list = self.db.history[id]
     if not list then list = {}; self.db.history[id] = list end
     local last = list[#list]
-    local point = { t = now, p = M.Number(price) and price or nil, q = quantity }
+    local point = { t = now, p = M.Number(price) and price or nil, q = quantity, d = type(depth) == "string" and depth or nil }
     if last and now - last.t <= HISTORY_MERGE and now >= last.t then
         list[#list] = point
     else
@@ -176,11 +178,12 @@ end
 
 function D:History(id) return self.db and self.db.history[id] or {} end
 
--- levels: market depth from M.Levels (optional).
-function D:RecordScan(id, price, quantity, now, levels)
+-- levels: market depth from M.Levels (optional); truncated: dearer levels
+-- were left out.
+function D:RecordScan(id, price, quantity, now, levels, truncated)
     if self.readOnly or not isID(id) then return end
     self.db.scans[id] = { price = price, qty = quantity, time = now, levels = levels }
-    self:AddHistory(id, price, quantity, now)
+    self:AddHistory(id, price, quantity, now, levels and M.EncodeDepth(levels, truncated) or nil)
     self:Touch()
 end
 
@@ -191,7 +194,7 @@ function D:ClearListings(id, now)
     local scan = self.db and self.db.scans[id]
     if self.readOnly or not scan then return end
     scan.levels, scan.qty, scan.time = {}, 0, now
-    self:AddHistory(id, nil, 0, now)
+    self:AddHistory(id, nil, 0, now, "") -- an empty book
     self:Touch()
 end
 

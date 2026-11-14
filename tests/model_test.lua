@@ -224,28 +224,72 @@ test("market rows: quantity at each level, and a ghost for your price", function
     assert(#M.MarketRows(levels, nil, nil) == 4, "no price, no ghost")
 end)
 
-test("activity: a listed count that moves is a busy market", function()
+test("depth round-trips as text", function()
+    local text = M.EncodeDepth({ { price = 288, qty = 35 }, { price = 289, qty = 1 } }, true)
+    assert(text == "288:35,289:1+")
+    local levels, cut = M.DecodeDepth(text)
+    assert(#levels == 2 and levels[1].price == 288 and levels[2].qty == 1 and cut)
+    local empty, emptyCut = M.DecodeDepth("")
+    assert(#empty == 0 and not emptyCut and M.DecodeDepth(nil) == nil)
+end)
+
+local function book(text) return (M.DecodeDepth(text)) end
+
+test("order books: buying takes the cheap end, supply adds, cancels sit apart", function()
+    -- Only new supply: everything that was there still is.
+    local c = M.CompareDepth(book("288:35,290:1"), false, book("288:35,290:1,300:10"), false)
+    assert(c.bought == 0 and c.added == 10 and c.removed == 0)
+    -- Buyers ate 79 of the cheapest level.
+    c = M.CompareDepth(book("20:379,25:473"), false, book("20:300,25:473"), false)
+    assert(c.bought == 79 and c.added == 0)
+    -- The 288s sold out and someone undercut at 287: 35 bought, 20 new.
+    c = M.CompareDepth(book("288:35,289:5"), false, book("287:20,289:5"), false)
+    assert(c.bought == 35 and c.added == 20 and c.removed == 0)
+    -- Dear units vanished while cheap ones sat there: cancelled, not bought.
+    c = M.CompareDepth(book("10:5,50:20"), false, book("10:5"), false)
+    assert(c.bought == 0 and c.removed == 20)
+    -- Levels past where the newer book was cut off aren't counted as gone.
+    c = M.CompareDepth(book("10:5,20:5,90:50"), false, book("10:2,20:5"), true)
+    assert(c.bought == 3 and c.removed == 0)
+    -- Sold out completely.
+    c = M.CompareDepth(book("10:5,11:3"), false, book(""), false)
+    assert(c.bought == 8)
+end)
+
+test("demand: rated by what's bought, not by the listed count moving", function()
     local now = 1000000
-    local function hist(qs, step)
+    local function hist(books, step)
         local h = {}
-        for i, q in ipairs(qs) do h[i] = { t = now - (#qs - i) * step, p = 20, q = q } end
+        for i, d in ipairs(books) do
+            local levels = book(d)
+            local q = 0; for _, l in ipairs(levels) do q = q + l.qty end
+            h[i] = { t = now - (#books - i) * step, p = levels[1] and levels[1].price, q = q, d = d }
+        end
         return h
     end
-    local busy = M.Activity(hist({ 525, 510, 498, 530, 512, 505 }, 1800), now, 7)
-    assert(busy.key == "busy" and busy.rescans == 5 and busy.changes == 5 and busy.confident)
-    -- drops: 15 + 12 + 18 + 7 = 52 over 2.5h
-    near(busy.soldPerDay, 52 / 9000 * 86400, 1e-6, "units leaving per day")
-    local still = M.Activity(hist({ 61, 61, 61, 61 }, 7200), now, 7)
-    assert(still.key == "stagnant" and still.changeRate == 0)
-    local quick = M.Activity(hist({ 61, 61, 61 }, 30), now, 7)
-    assert(quick.key == "slow", "a minute of no change isn't stagnant")
-    local slow = M.Activity(hist({ 68, 68, 67, 67, 67 }, 3600), now, 7)
-    assert(slow.key == "slow")
-    assert(M.Activity(hist({ 10 }, 60), now, 7).key == nil, "one scan says nothing")
-    assert(M.Activity({ { t = now - 30 * 86400, q = 5 }, { t = now - 29 * 86400, q = 1 } }, now, 7).points == 0, "old points ignored")
-    near(M.ProfitPerDay(10, busy, 20), 200, 1e-9, "capped at what you list")
-    near(M.ProfitPerDay(10, { soldPerDay = 3 }, 20), 30, 1e-9)
-    assert(M.ProfitPerDay(10, still, 20) == 0, "nothing left the market")
+    -- Count changes every scan, but only because supply keeps arriving.
+    local piling = M.Activity(hist({ "288:35,290:1", "288:35,290:1,295:5", "288:35,290:6,295:5",
+        "288:35,290:6,295:9", "288:35,290:6,295:9,300:20" }, 3600), now, 7)
+    assert(piling.bought == 0 and piling.added == 34 and piling.key == "stagnant" and piling.flooding,
+        "more supply, no demand: stagnant")
+    -- Steady trading: the count hardly moves but the cheap end keeps selling and refilling.
+    local healthy = M.Activity(hist({ "20:100,21:100", "20:40,21:100,19:0", "19:60,20:40,21:100",
+        "19:10,20:40,21:100", "18:50,19:10,20:40,21:100" }, 1800), now, 7)
+    assert(healthy.bought == 60 + 50 and healthy.key == "busy" and healthy.buys == 2 and not healthy.flooding,
+        "busy, got " .. tostring(healthy.key))
+    near(healthy.demandPerDay, 110 / 7200 * 86400, 1e-6, "bought per day")
+    -- A little buying from a big pile.
+    local slow = M.Activity(hist({ "50:500", "50:497", "50:497", "50:495" }, 3600), now, 7)
+    assert(slow.key == "slow" and slow.bought == 5)
+    -- Quick rescans and old-style points without depth don't rate anything.
+    local quick = M.Activity(hist({ "10:5", "10:5", "10:5" }, 30), now, 7)
+    assert(quick.key == nil and quick.compared == 2)
+    assert(M.Activity({ { t = now - 600, q = 5 }, { t = now, q = 3 } }, now, 7).compared == 0)
+    -- A gap long enough for listings to expire isn't compared.
+    assert(M.Activity(hist({ "10:5", "11:5" }, M.PAIR_MAX + 1), now, 7).compared == 0)
+    near(M.ProfitPerDay(10, healthy, 20), 200, 1e-9, "capped at what you list")
+    near(M.ProfitPerDay(10, { demandPerDay = 3 }, 20), 30, 1e-9)
+    assert(M.ProfitPerDay(10, piling, 20) == 0, "nothing bought")
     assert(M.ProfitPerDay(10, quick, 20) == nil, "too short to measure")
 end)
 

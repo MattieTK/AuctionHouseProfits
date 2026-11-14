@@ -272,7 +272,7 @@ local SORTS = {
     unit = ranked(function() return 1 end, function(r) return r.profitUnit end),
     activity = ranked(function(r) return r.activity and r.activity.level and 1 or 2 end, function(r)
         local act = r.activity
-        return act and act.level and (act.level.rank * 1e9 + (act.soldPerDay or 0)) or nil
+        return act and act.level and (act.level.rank * 1e9 + (act.demandPerDay or 0)) or nil
     end),
 }
 function A.Sorter(sort) return SORTS[sort] or SORTS.day end

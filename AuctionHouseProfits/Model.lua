@@ -234,6 +234,7 @@ end
 ---------------------------------------------------------------------------
 -- results = { { price = unit copper, qty = n, mine = your units, sellers = n, seller = name } }
 -- Returns price levels, cheapest first, with your units split out.
+-- levels.truncated is set when dearer levels were cut off by the limit.
 function M.Levels(results, limit)
     local by, levels = {}, {}
     for _, r in ipairs(results or {}) do
@@ -252,7 +253,9 @@ function M.Levels(results, limit)
         end
     end
     table.sort(levels, function(a, b) return a.price < b.price end)
+    local truncated = #levels > (limit or 12)
     for i = #levels, (limit or 12) + 1, -1 do levels[i] = nil end
+    levels.truncated = truncated or nil
     return levels
 end
 
@@ -352,67 +355,145 @@ function M.MarketRows(levels, plan, price, qty, limit, copperAllowed)
 end
 
 ---------------------------------------------------------------------------
--- Market activity, from your scan history
+-- Market demand, from your scan history
 ---------------------------------------------------------------------------
--- history = { { t = time, p = lowest unit price or nil, q = units listed } },
--- oldest first. A market where the listed count moves between scans is one
--- people buy from; one that sits still is one you'd wait in.
+-- Each history point keeps the order book it saw: units at each price.
+-- Stored as text, "288:35,289:1", with a trailing "+" when dearer levels
+-- were cut off.
+function M.EncodeDepth(levels, truncated)
+    local parts = {}
+    for _, l in ipairs(levels or {}) do parts[#parts + 1] = floor(l.price) .. ":" .. floor(l.qty) end
+    return table.concat(parts, ",") .. (truncated and "+" or "")
+end
+
+function M.DecodeDepth(text)
+    if type(text) ~= "string" then return nil end
+    local levels = {}
+    for price, qty in text:gmatch("(%d+):(%d+)") do
+        levels[#levels + 1] = { price = tonumber(price), qty = tonumber(qty) }
+    end
+    table.sort(levels, function(a, b) return a.price < b.price end)
+    return levels, text:sub(-1) == "+"
+end
+
+-- What happened between two order books. Buyers take the cheapest units
+-- first, so units gone from the cheap end were bought: every level that
+-- emptied, up to and including the first one with units still left. Units
+-- gone from dearer levels while cheaper ones sat untouched were cancelled
+-- or expired, not bought. Units that weren't there before are new supply.
+-- New listings at a price that was also bought from hide some purchases,
+-- so "bought" is a floor. Prices past a cut-off book are left out.
+function M.CompareDepth(a, aCut, b, bCut)
+    local aTop = aCut and a[#a] and a[#a].price or huge
+    local bTop = bCut and b[#b] and b[#b].price or huge
+    local inA, inB = {}, {}
+    for _, l in ipairs(a) do inA[l.price] = (inA[l.price] or 0) + l.qty end
+    for _, l in ipairs(b) do inB[l.price] = (inB[l.price] or 0) + l.qty end
+    local bought, removed, buying = 0, 0, true
+    for _, l in ipairs(a) do
+        if l.price > bTop then break end
+        local left = inB[l.price] or 0
+        local gone = max(0, l.qty - left)
+        if buying then
+            bought = bought + gone
+            if left > 0 then buying = false end
+        else
+            removed = removed + gone
+        end
+    end
+    local added = 0
+    for _, l in ipairs(b) do
+        if l.price <= aTop then added = added + max(0, l.qty - (inA[l.price] or 0)) end
+    end
+    return { bought = bought, added = added, removed = removed }
+end
+
 M.ACTIVITY = {
     busy = { label = "Busy", rank = 4 },
     active = { label = "Active", rank = 3 },
     slow = { label = "Slow", rank = 2 },
     stagnant = { label = "Stagnant", rank = 1 },
 }
-local GAP_CAP = 86400 -- one long gap shouldn't dilute the rate
+-- Over a long gap listings expire and get relisted, which looks like buying;
+-- only compare scans this close together.
+M.PAIR_MAX = 8 * 3600
+local MIN_SPAN = 1800        -- under half an hour of scans says little
+local STAGNANT_SPAN = 3 * 3600 -- nothing bought over this long is stagnant
 
+-- history = { { t = time, p = lowest price, q = units listed, d = depth text } },
+-- oldest first. Demand is measured from what was bought between scans,
+-- relative to how much is on the market:
+--   busy      the whole market sells about once a day or faster
+--   active    a fifth of it a day (a tenth, if bought from in most rescans)
+--   slow      some buying
+--   stagnant  nothing bought in 3h+ of scans, however much was listed
+-- Supply that grows while little is bought is flagged as piling up.
 function M.Activity(history, now, days)
     local since = (now or 0) - (days or 7) * 86400
     local pts = {}
     for _, h in ipairs(history or {}) do
         if M.Number(h.t) and M.Number(h.q) and h.t >= since then pts[#pts + 1] = h end
     end
-    local out = { points = #pts, last = pts[#pts], first = pts[1] }
-    if #pts < 2 then return out end
-    local changes, drops, adds, span, pairsSeen = 0, 0, 0, 0, 0
-    for i = 2, #pts do
-        local a, b = pts[i - 1], pts[i]
-        local dt = b.t - a.t
-        if dt > 0 then
-            pairsSeen = pairsSeen + 1
-            span = span + min(dt, GAP_CAP)
-            local d = b.q - a.q
-            if d ~= 0 then changes = changes + 1 end
-            if d < 0 then drops = drops - d else adds = adds + d end
+    local out = { points = #pts, last = pts[#pts], first = pts[1], boughtAt = {} }
+    local span, bought, added, removed, compared, timed, buys, qtyTime = 0, 0, 0, 0, 0, 0, 0, 0
+    local prev, prevCut
+    for i, h in ipairs(pts) do
+        local depth, cut = M.DecodeDepth(h.d)
+        if depth and prev then
+            local a = pts[i - 1]
+            local dt = h.t - a.t
+            if dt > 0 and dt <= M.PAIR_MAX then
+                local c = M.CompareDepth(prev, prevCut, depth, cut)
+                compared, span = compared + 1, span + dt
+                bought, added, removed = bought + c.bought, added + c.added, removed + c.removed
+                qtyTime = qtyTime + a.q * dt
+                out.boughtAt[h] = c.bought
+                if dt >= 120 then
+                    timed = timed + 1
+                    if c.bought > 0 then buys = buys + 1 end
+                end
+            end
         end
+        if depth then prev, prevCut = depth, cut else prev = nil end
     end
-    out.rescans, out.changes, out.drops, out.adds, out.span = pairsSeen, changes, drops, adds, span
-    if pairsSeen == 0 then return out end
-    out.changeRate = changes / pairsSeen
-    -- Units that left (bought, cancelled or expired) per day: an upper bound on sales.
-    if span >= 600 then out.soldPerDay = drops / span * 86400 end
-    local r = out.changeRate
+    out.compared, out.span, out.bought, out.added, out.removed = compared, span, bought, added, removed
+    if compared == 0 then return out end
+    out.avgQty = qtyTime / span
+    out.buyRate = timed > 0 and buys / timed or nil
+    out.rescans, out.buys = timed, buys
+    out.flooding = added > 0 and added >= 2 * bought
+    if span < MIN_SPAN then return out end
+    out.demandPerDay = bought / span * 86400
+    out.supplyPerDay = added / span * 86400
+    out.turnover = out.demandPerDay / max(1, out.avgQty)
     local key
-    if r >= 0.6 then key = "busy" elseif r >= 0.3 then key = "active" elseif r > 0 then key = "slow" else key = "stagnant" end
-    -- A quiet hour says little; only call a market stagnant over real time.
-    if key == "stagnant" and span < 3 * 3600 then key = "slow" end
-    out.key = key
-    out.level = M.ACTIVITY[key]
-    out.confident = pairsSeen >= 3
+    if bought == 0 then
+        key = span >= STAGNANT_SPAN and "stagnant" or nil
+    elseif out.turnover >= 1 or (out.turnover >= 0.3 and (out.buyRate or 0) >= 0.6) then
+        key = "busy"
+    elseif out.turnover >= 0.2 or (out.turnover >= 0.1 and (out.buyRate or 0) >= 0.5) then
+        key = "active"
+    else
+        key = "slow"
+    end
+    out.key, out.level = key, key and M.ACTIVITY[key]
+    out.confident = timed >= 3
     return out
 end
 
--- Profit per day if you list at the front of the queue: what leaves the
--- market each day, capped at what you'd list.
+-- Profit per day if you list at the front of the queue: what buyers take
+-- each day, capped at what you'd list.
 function M.ProfitPerDay(profitUnit, activity, listing)
-    if not M.Number(profitUnit) or not activity or not M.Number(activity.soldPerDay) then return nil end
-    local units = activity.soldPerDay
+    if not M.Number(profitUnit) or not activity or not M.Number(activity.demandPerDay) then return nil end
+    local units = activity.demandPerDay
     if M.Number(listing) and listing > 0 then units = min(units, listing) end
     return profitUnit * units
 end
 
 -- Group history into n equal time buckets between from and to, for a chart.
--- Each bucket keeps the last listed count and the lowest price seen in it.
-function M.Buckets(history, from, to, n)
+-- Each bucket keeps the last listed count, the lowest price seen in it and
+-- (with boughtAt from M.Activity) the units bought since the scan before.
+function M.Buckets(history, from, to, n, boughtAt)
     local buckets = {}
     for i = 1, n do buckets[i] = { from = from + (to - from) * (i - 1) / n, to = from + (to - from) * i / n } end
     if to <= from then return buckets end
@@ -423,6 +504,8 @@ function M.Buckets(history, from, to, n)
             b.q, b.t = h.q, h.t
             if M.Number(h.p) and (not b.p or h.p < b.p) then b.p = h.p end
             b.n = (b.n or 0) + 1
+            local sold = boughtAt and boughtAt[h]
+            if sold then b.bought = (b.bought or 0) + sold end
         end
     end
     return buckets

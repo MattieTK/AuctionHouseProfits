@@ -391,17 +391,43 @@ function U.Meter(bars, activity)
     end
 end
 
--- Activity summary lines for tooltips.
+local function units(n) return count(math.floor(n + 0.5)) end
+
+-- "2h 10m", "45m", "3d 4h" for spans of scan history.
+local function span(seconds)
+    seconds = math.floor((seconds or 0) / 60 + 0.5)
+    if seconds < 60 then return seconds .. "m" end
+    if seconds < 1440 then
+        local m = seconds % 60
+        return math.floor(seconds / 60) .. "h" .. (m > 0 and (" " .. m .. "m") or "")
+    end
+    local h = math.floor(seconds / 60) % 24
+    return math.floor(seconds / 1440) .. "d" .. (h > 0 and (" " .. h .. "h") or "")
+end
+U.Span = span
+
+-- Why there's no rating yet, as (headline, detail).
+function U.ActivityPending(act)
+    if not act or act.points == 0 then return "Not scanned yet", "Scan it now and again: what gets bought between scans shows demand." end
+    if (act.compared or 0) == 0 then return "One scan so far", "Scan again later: what gets bought between scans shows demand." end
+    if (act.bought or 0) == 0 then
+        return "No sales seen yet", "Nothing bought in " .. span(act.span) .. " of scans. Stagnant after 3h."
+    end
+    return "Too early to tell", units(act.bought) .. " bought in " .. span(act.span) .. " of scans. Give it half an hour."
+end
+
+-- Demand summary lines for tooltips.
 function U:ActivityLines(tip, act, profitUnit, perDay)
     if not act or not act.level then
-        local n = act and act.points or 0
-        tip:AddLine(n == 0 and "Market: never scanned" or "Market: scan again later to see it move", .6, .6, .6)
+        local head, detail = U.ActivityPending(act)
+        tip:AddLine("Market: " .. head, .6, .6, .6)
+        tip:AddLine(detail, .6, .6, .6, true)
         return
     end
-    tip:AddLine("Market: " .. act.level.label .. string.format(" (listed count changed in %d of %d rescans)", act.changes, act.rescans), 1, 1, 1)
-    if act.soldPerDay then
-        tip:AddLine(string.format("About %s units leave the AH a day", count(math.floor(act.soldPerDay + 0.5))), .8, .8, .8)
-    end
+    tip:AddLine("Market: " .. act.level.label, 1, 1, 1)
+    tip:AddLine(string.format("%s bought, %s newly listed in %s of scans", units(act.bought), units(act.added), span(act.span)), .8, .8, .8)
+    if act.demandPerDay then tip:AddLine("About " .. units(act.demandPerDay) .. " bought a day", .8, .8, .8) end
+    if act.flooding then tip:AddLine("Supply is piling up faster than it sells.", .93, .48, .48, true) end
     if perDay then tip:AddLine("If you list first: " .. Money(perDay, true, true) .. " a day", 1, 1, 1) end
 end
 
@@ -584,6 +610,9 @@ function U:BuildDetail(body)
     self.cards.faction = card(0, FACTION_COLOR)
     self.cards.neutral = card(270, NEUTRAL_COLOR)
     self.activityCard = card(270, { .91, .74, .33 })
+    -- Its explanations run to two lines (line2 is empty when they do).
+    self.activityCard.line1:SetWordWrap(true)
+    self.activityCard.line1:SetJustifyV("TOP")
 
     -- Bottom left: lowest price and units listed over time.
     y = -226
@@ -701,7 +730,12 @@ function U:BuildChart(content, x, y)
         bar:SetPoint("BOTTOMLEFT", (i - 1) * slot + 1, 1)
         bar:SetWidth(math.max(1, slot - 2))
         bar:SetColorTexture(.40, .62, .85, .55)
-        columns[i] = { frame = col, bar = bar }
+        local sold = area:CreateTexture(nil, "ARTWORK", nil, 1)
+        sold:SetPoint("BOTTOMLEFT", (i - 1) * slot + 1, 1)
+        sold:SetWidth(math.max(1, slot - 2))
+        sold:SetColorTexture(.30, .76, .30, .9)
+        sold:Hide()
+        columns[i] = { frame = col, bar = bar, sold = sold }
     end
     self.chart = { area = area, range = range, qtyMax = qtyMax, priceTop = priceTop, priceBottom = priceBottom,
         empty = empty, legend = legend, columns = columns, lines = {}, slot = slot }
@@ -714,6 +748,7 @@ function U:ChartTooltip(col)
     GameTooltip:AddLine(ago(time() - b.t))
     GameTooltip:AddDoubleLine("Listed", count(b.q), 1, 1, 1, 1, 1, 1)
     GameTooltip:AddDoubleLine("Lowest price", b.p and Money(b.p) or "none listed", 1, 1, 1, 1, 1, 1)
+    if b.bought then GameTooltip:AddDoubleLine("Bought since the scan before", count(b.bought), 1, 1, 1, .3, .76, .3) end
     if b.n > 1 then GameTooltip:AddLine(b.n .. " scans", .6, .6, .6) end
     GameTooltip:Show()
 end
@@ -731,7 +766,7 @@ function U:RefreshChart(a)
     local c, now = self.chart, time()
     local history = a.history or {}
     local from, to = chartSpan(history, now)
-    local buckets = M.Buckets(history, from, to, CHART_BUCKETS)
+    local buckets = M.Buckets(history, from, to, CHART_BUCKETS, a.activity and a.activity.boughtAt)
     local maxQ, minP, maxP, points = 0, nil, nil, 0
     for _, b in ipairs(buckets) do
         if b.n then
@@ -760,6 +795,13 @@ function U:RefreshChart(a)
         else
             col.bar:Hide()
         end
+        -- Units bought since the scan before, on the same scale, in front.
+        if b.bought and b.bought > 0 and maxQ > 0 then
+            col.sold:SetHeight(math.max(2, math.floor(plotH * math.min(b.bought, maxQ) / maxQ)))
+            col.sold:Show()
+        else
+            col.sold:Hide()
+        end
         if b.n and b.p then
             local px = (i - 0.5) * c.slot
             local py = 4 + (plotH - 8) * (b.p - lo) / (hi - lo)
@@ -779,8 +821,8 @@ function U:RefreshChart(a)
         end
     end
     for i = used + 1, #c.lines do c.lines[i]:Hide() end
-    c.legend:SetText(color("ff66a0d9", "Bars") .. color(MUTED, ": units listed   ") .. color(ACCENT, "Line") ..
-        color(MUTED, ": lowest price   " .. #history .. " scans"))
+    c.legend:SetText(color("ff66a0d9", "Listed") .. color(MUTED, "  ") .. color(GOOD, "Bought") ..
+        color(MUTED, "  ") .. color(ACCENT, "Lowest price") .. color(MUTED, "  · " .. #history .. " scans"))
 end
 
 ---------------------------------------------------------------------------
@@ -1081,21 +1123,27 @@ end
 
 local ACTIVITY_COLOR = { busy = GOOD, active = "ff9ccc4c", slow = ACCENT, stagnant = BAD }
 
--- How busy the market is, from the listed count across your scans.
+-- How much is being bought, from the order books across your scans.
 function U:RefreshActivity(a)
     local c, act = self.activityCard, a.activity
-    c.head:SetText("Market activity · last 7 days")
+    c.head:SetText("Demand · last 7 days of scans")
     if act and act.level then
-        local per = act.soldPerDay and ("  ~" .. count(math.floor(act.soldPerDay + 0.5)) .. " leave a day") or ""
+        local per = act.demandPerDay and ("  ~" .. units(act.demandPerDay) .. " bought a day") or ""
         c.profit:SetText(color(ACTIVITY_COLOR[act.key], act.level.label) .. color(MUTED, per))
-        c.line1:SetText(string.format("Listed count changed in %d of %d rescans", act.changes, act.rescans))
-        c.line2:SetText(a.perDay and ("If you list first: " .. Money(a.perDay, true, true) .. " a day")
-            or (act.soldPerDay and "" or "Scan again later to measure how fast it sells."))
+        local flow = string.format("%s bought, %s newly listed in %s", units(act.bought), units(act.added), span(act.span))
+        c.line1:SetText(act.flooding and color(BAD, "Supply piling up: ") .. flow or flow)
+        if a.perDay then
+            c.line2:SetText("If you list first: " .. Money(a.perDay, true, true) .. " a day")
+        elseif act.turnover and act.turnover > 0 then
+            c.line2:SetText("The market sells through every " .. span(86400 / act.turnover))
+        else
+            c.line2:SetText("")
+        end
     else
-        local n = act and act.points or 0
-        c.profit:SetText(color(MUTED, n == 0 and "Not scanned yet" or "One scan so far"))
-        c.line1:SetText("Busy markets change between scans; quiet ones")
-        c.line2:SetText("sit still. Scan now and again to tell them apart.")
+        local head, detail = U.ActivityPending(act)
+        c.profit:SetText(color(MUTED, head))
+        c.line1:SetText(detail)
+        c.line2:SetText("")
     end
     local last = act and act.last
     c.line3:SetText(last and (count(last.q) .. " listed " .. ago(time() - last.t)) or "")

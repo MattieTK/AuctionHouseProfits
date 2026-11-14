@@ -162,11 +162,14 @@ end
 
 -- Any search result for an item, whoever asked for it (us, the Blizzard
 -- Buy/Auctions pages, Auctionator), refreshes its recorded market depth.
-local function record(id, results, total)
+-- capped: there were more results than we read.
+local function record(id, results, total, capped)
     local levels = M.Levels(results, 12)
+    local truncated = levels.truncated
+    levels.truncated = nil -- saved scans keep only the array
     local unit = levels[1] and levels[1].price or nil
     if P.pending and P.pending.id == id then P.pending = nil end
-    if unit then D:RecordScan(id, unit, total, time(), levels) end
+    if unit then D:RecordScan(id, unit, total, time(), levels, truncated or capped) end
     notify(id)
 end
 
@@ -199,7 +202,9 @@ function P:OnCommodityResults(itemID)
         end
     end
     local all = C_AuctionHouse.GetCommoditySearchResultsQuantity and C_AuctionHouse.GetCommoditySearchResultsQuantity(itemID)
-    record(itemID, results, readable(all) and M.Number(all) and all or total)
+    -- Results arrive in parts; until they're all in, the dear end is missing.
+    local full = C_AuctionHouse.HasFullCommoditySearchResults and C_AuctionHouse.HasFullCommoditySearchResults(itemID)
+    record(itemID, results, readable(all) and M.Number(all) and all or total, n > 200 or full == false)
 end
 
 function P:OnItemResults(itemKey)
@@ -230,7 +235,8 @@ function P:OnItemResults(itemKey)
         end
         return
     end
-    record(id, results, count)
+    local full = C_AuctionHouse.HasFullItemSearchResults and C_AuctionHouse.HasFullItemSearchResults(itemKey)
+    record(id, results, count, n > 100 or full == false)
 end
 
 -- Which auction house you're standing at. Neutral AHs are in Booty Bay,

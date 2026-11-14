@@ -441,15 +441,16 @@ end)
 test("each search adds to the item's price and volume history", function()
     local D, now = ns.Data, os.time()
     local h = D:History(14047)
-    assert(#h >= 1 and h[#h].q == 40 and h[#h].p == 2100)
+    assert(#h >= 1 and h[#h].q == 40 and h[#h].p == 2100 and h[#h].d == "2100:40,2300:10", tostring(h[#h].d))
     D:AddHistory(3371, 30, 5, now - 100); D:AddHistory(3371, 30, 4, now - 97)
     local merged = D:History(3371)
     assert(merged[#merged].q == 4 and merged[#merged].t == now - 97 and (#merged < 2 or merged[#merged - 1].t ~= now - 100),
         "result events from one search merge")
-    -- Coarse Thread: the count moves on every rescan.
-    for i, q in ipairs({ 300, 280, 290, 260, 250 }) do D:AddHistory(2320, 25, q, now - (6 - i) * 1200) end
+    -- Coarse Thread: the cheap end keeps selling and refilling.
+    local books = { "25:100,26:200", "25:40,26:200", "24:60,25:40,26:200", "24:10,25:40,26:200", "23:50,24:10,25:40,26:200" }
+    for i, d in ipairs(books) do D:AddHistory(2320, 25, 300, now - (6 - i) * 1200, d) end
     local a = ns.Analysis.Item(ns.App, 2320, now)
-    assert(a.activity.key == "busy" and a.activity.soldPerDay > 0)
+    assert(a.activity.key == "busy" and a.activity.bought == 110, tostring(a.activity.key))
     assert(a.perDay == nil or a.perDay < 0, "at 25c the 12s deposit eats the profit")
     ns.Data:SetPlan(2320, "price", 300)
     a = ns.Analysis.Item(ns.App, 2320, now)
@@ -461,6 +462,9 @@ test("each search adds to the item's price and volume history", function()
     local bars = 0
     for _, col in ipairs(ns.UI.chart.columns) do if col.bar:IsShown() then bars = bars + 1 end end
     assert(bars == 5, "one volume bar per scan, got " .. bars)
+    local sold = 0
+    for _, col in ipairs(ns.UI.chart.columns) do if col.sold:IsShown() then sold = sold + 1 end end
+    assert(sold == 2, "bought bars where the cheap end sold, got " .. sold)
     assert(ns.UI.activityCard.profit:GetText():find("Busy"))
     ns.UI:SetPlan("price", nil); ns.UI:Select(14047); settle()
 end)
