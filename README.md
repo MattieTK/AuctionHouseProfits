@@ -10,6 +10,7 @@ player-facing description.
 | --- | --- |
 | `AuctionHouseProfits/` | The add-on, exactly as it ships. TOC load order is authoritative. |
 | `AuctionHouseProfits/Snipe.lua`, `SnipePanel.lua` | Vendor sniper: full scan, live checks, one-press buying (protected calls run only from the Buy button or key bindings in `Bindings.xml`). |
+| `AuctionHouseProfits/Earnings.lua` | What the add-on has made you, from the per-day ledger in `Data.lua` (`ledger`, kept for good). |
 | `AuctionHouseProfits/Libs/SomethingNeedDoing/` | Vendored framework, pinned by `UPSTREAM.json`. Don't edit; update from upstream. |
 | `tests/model_test.lua` | Pure math tests. |
 | `tests/runtime_test.lua` | Loads the whole add-on against a WoW mock and drives merchant, window, AH tab and price-check flows. |

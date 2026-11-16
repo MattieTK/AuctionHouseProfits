@@ -186,9 +186,19 @@ function V:Build(ah)
     session:SetPoint("BOTTOMLEFT", 12, 30)
     session:SetPoint("RIGHT", f, "RIGHT", -10, 0)
     self.session = session
+    -- What the addon has made you; hover for today, this week and in all.
+    local made = CreateFrame("Button", nil, f)
+    made:SetPoint("BOTTOMRIGHT", -10, 10)
+    made:SetSize(215, 16)
+    local madeText = label(made, "GameFontHighlightSmall")
+    madeText:SetAllPoints()
+    madeText:SetJustifyH("RIGHT")
+    made.text = madeText
+    tip(made, function(t) ns.Earnings:Tooltip(t, time()) end)
+    self.made = made
     local bags = label(f, "GameFontDisableSmall")
     bags:SetPoint("BOTTOMLEFT", 12, 14)
-    bags:SetPoint("RIGHT", f, "RIGHT", -10, 0)
+    bags:SetPoint("RIGHT", made, "LEFT", -6, 0)
     self.bags = bags
 
     -- Background work only while you can see the panel.
@@ -411,7 +421,8 @@ function V:Refresh()
         self.session:SetText(color(MUTED, "Each press buys only what the button says. Right-click to skip."))
     end
     local free = freeSlots()
-    self.bags:SetText(free and (free == 0 and color(BAD, "Bags full: sell to a vendor first.") or (free .. " bag slots free")) or "")
+    self.bags:SetText(free and (free == 0 and color(BAD, "Bags full: sell to a vendor first.") or (free .. " free slots")) or "")
+    self.made.text:SetText(ns.Earnings.Short(time()))
 end
 
 function V:Attach(app, core)

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.2
+
+- **What the add-on has made you, kept for good.** Every sniper buy is recorded with what a vendor pays for it, and every auction sale of an item whose cost is known with its profit after the AH cut. Both are kept by day, across logouts and characters on the account.
+- The sniper panel shows what you've made today and in all, and the Profits tab shows the all-time total. Hover either for today, the last 7 and 30 days, all time, where it came from, and a day-by-day line for the last week. `/ahp made` prints the same to chat.
+- On first load it starts from the auction sales already on record (the last 30 days).
+
 ## 0.4.1
 
 From in-game testing.

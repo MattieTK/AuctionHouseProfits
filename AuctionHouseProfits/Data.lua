@@ -9,7 +9,7 @@ ns.Data = D
 local SCHEMA = 2
 local SALE_DAYS = 30
 local HISTORY_DAYS, HISTORY_MAX, HISTORY_MERGE = 14, 200, 5
-local TABLES = { "items", "scans", "manual", "plans", "calibration", "purchases", "sales", "history", "standings", "watch" }
+local TABLES = { "items", "scans", "manual", "plans", "calibration", "purchases", "sales", "history", "standings", "watch", "ledger" }
 local WATCH_DAYS = 14
 
 local function isID(k) return type(k) == "number" and k > 0 and k == math.floor(k) end
@@ -110,6 +110,20 @@ local function sanitize(db, now)
         if not isID(id) or not M.Number(seen) or (now and seen < now - WATCH_DAYS * 86400) then db.watch[id] = nil end
     end
     if db.fullScan ~= nil and not M.Number(db.fullScan) then db.fullScan = nil end
+    for key, day in pairs(db.ledger) do
+        if not M.IsDayKey(key) or type(day) ~= "table" then
+            db.ledger[key] = nil
+        else
+            for source, fields in pairs(M.LEDGER_FIELDS) do
+                local rec = day[source]
+                if rec ~= nil and type(rec) ~= "table" then day[source] = nil end
+                for _, k in ipairs(type(rec) == "table" and fields or {}) do
+                    if rec[k] ~= nil and not M.Number(rec[k]) then rec[k] = nil end
+                end
+            end
+        end
+    end
+    if db.ledgerSince ~= nil and not M.Number(db.ledgerSince) then db.ledgerSince = nil end
     for id, price in pairs(db.manual) do
         if not isID(id) or not M.Number(price) or price < 0 then db.manual[id] = nil end
     end
@@ -138,11 +152,15 @@ function D:Load(now)
         self.db = copy
         return false
     else
+        local seed = type(db.ledger) ~= "table"
         migrate(db)
         db.version = SCHEMA
         sanitize(db, now)
+        self.db = db
+        if seed then self:SeedLedger(now) end
     end
     self.db = db
+    if db.ledgerSince == nil and M.Number(now) then db.ledgerSince = now end
     return true
 end
 
@@ -350,3 +368,49 @@ function D:FullScanTime() return self.db and self.db.fullScan end
 function D:SetFullScanTime(t)
     if not self.readOnly and self.db and M.Number(t) then self.db.fullScan = t end
 end
+
+---------------------------------------------------------------------------
+-- Earnings ledger: what the addon has made you, one record per day. Kept
+-- for good (a year of play is a few hundred small records).
+---------------------------------------------------------------------------
+local dateFn = date or (os and os.date)
+function D.DayKey(t) return dateFn("%Y-%m-%d", t) end
+
+local function saleEntry(sale)
+    local r = M.SaleProfit(sale.gross, sale.qty, sale.unitCost, sale.cutRate)
+    return { n = 1, units = sale.qty, gross = sale.gross, net = r.net, profit = r.profit or 0, costed = r.profit and 1 or 0 }
+end
+
+-- kind "snipe": { units, spent, value }; kind "sale": a sale record as
+-- RecordSale stores it.
+function D:RecordEarning(kind, entry, now)
+    if self.readOnly or not self.db or type(entry) ~= "table" or not M.Number(now) then return end
+    local key = D.DayKey(now)
+    local day = self.db.ledger[key]
+    if not day then day = {}; self.db.ledger[key] = day end
+    if kind == "snipe" then
+        M.LedgerAdd(day, "s", { n = 1, units = entry.units, spent = entry.spent, value = entry.value })
+    elseif kind == "sale" then
+        M.LedgerAdd(day, "a", saleEntry(entry))
+    else
+        return
+    end
+    self:Touch()
+end
+
+-- The first time the ledger exists, start it from the auction sales already
+-- on record (the last 30 days).
+function D:SeedLedger(now)
+    if self.readOnly or not self.db then return end
+    local first
+    for _, sale in pairs(self.db.sales) do
+        local day = self.db.ledger[D.DayKey(sale.time)] or {}
+        self.db.ledger[D.DayKey(sale.time)] = day
+        M.LedgerAdd(day, "a", saleEntry(sale))
+        first = math.min(first or sale.time, sale.time)
+    end
+    self.db.ledgerSince = first or now
+end
+
+function D:Ledger() return self.db and self.db.ledger or {} end
+function D:LedgerSince() return self.db and self.db.ledgerSince end

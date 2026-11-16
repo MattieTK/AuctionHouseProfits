@@ -1,7 +1,7 @@
 local ADDON, ns = ...
 local M, D, P, R, U, T = ns.Model, ns.Data, ns.Prices, ns.Merchant, ns.UI, ns.AuctionTab
 local S, B, N, SP = ns.Post, ns.AuctionsBar, ns.Snipe, ns.SnipePanel
-local VERSION = "0.4.1"
+local VERSION = "0.4.2"
 
 -- WoW Forever only (interface 16001). Other clients have different AH rules.
 local interface = select(4, GetBuildInfo())
@@ -154,11 +154,13 @@ local function slash(args)
     local cmd = (args or ""):lower():match("^%s*(%S*)")
     if cmd == "snipe" or cmd == "sniper" then
         SP:Toggle()
+    elseif cmd == "made" or cmd == "earnings" or cmd == "earned" then
+        for _, line in ipairs(ns.Earnings:Report(time())) do say(line) end
     elseif cmd == "options" or cmd == "config" then
         local ok, err = ns.Options:Toggle()
         if not ok then say(err.message) end
     elseif cmd == "help" then
-        say("/ahp opens the calculator, /ahp snipe shows or hides the vendor sniper, /ahp options opens settings. At the auction house, use the Profits tab.")
+        say("/ahp opens the calculator, /ahp snipe shows or hides the vendor sniper, /ahp made shows what the addon has made you, /ahp options opens settings. At the auction house, use the Profits tab.")
     else
         U:ToggleWindow()
     end

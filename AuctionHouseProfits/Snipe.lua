@@ -370,6 +370,7 @@ function N:Bought()
     local s = self.session
     s.buys, s.units = s.buys + 1, s.units + p.qty
     s.spent, s.value = s.spent + (p.cost or p.quoted or 0), s.value + p.value
+    D:RecordEarning("snipe", { units = p.qty, spent = p.cost or p.quoted or 0, value = p.value }, time())
     local live = self.live[p.id]
     if p.kind == "item" and live and live.auctions then
         -- The game re-sends the row (with a new auction ID) after a purchase.

@@ -161,8 +161,9 @@ function S:OnOwnedAuctions(app, now)
             if a.status == sold then
                 o.sold, o.soldGross = o.sold + a.quantity, o.soldGross + (amount or 0)
                 if amount and M.Number(a.auctionID) then
-                    D:RecordSale(a.auctionID, { id = id, qty = a.quantity, gross = amount, time = now,
-                        unitCost = (A.CostBasis(app, id, now)), cutRate = cutRate })
+                    local sale = { id = id, qty = a.quantity, gross = amount, time = now,
+                        unitCost = (A.CostBasis(app, id, now)), cutRate = cutRate }
+                    if D:RecordSale(a.auctionID, sale) then D:RecordEarning("sale", sale, now) end
                 end
             else
                 -- Live commodity rows show a unit price; item rows a total.

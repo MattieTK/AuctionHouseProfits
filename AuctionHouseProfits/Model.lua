@@ -637,3 +637,56 @@ function M.EstimateDeal(flat, sell, minProfit, basis)
     if qty == 0 then return nil end
     return { qty = qty, cost = cost, profit = profit }
 end
+
+---------------------------------------------------------------------------
+-- Earnings ledger
+---------------------------------------------------------------------------
+-- One record per day ("YYYY-MM-DD"), split by where the money came from:
+--   s: vendor sniper buys { n, units, spent, value }, value = what vendors pay
+--   a: your auction sales { n, units, gross, net, profit, costed }, profit and
+--      costed cover only sales whose cost is known
+M.LEDGER_FIELDS = {
+    s = { "n", "units", "spent", "value" },
+    a = { "n", "units", "gross", "net", "profit", "costed" },
+}
+
+function M.IsDayKey(key)
+    return type(key) == "string" and key:match("^%d%d%d%d%-%d%d%-%d%d$") ~= nil
+end
+
+function M.LedgerAdd(day, source, add)
+    local fields = M.LEDGER_FIELDS[source]
+    if type(day) ~= "table" or not fields or type(add) ~= "table" then return end
+    local rec = day[source]
+    if type(rec) ~= "table" then rec = {}; day[source] = rec end
+    for _, k in ipairs(fields) do
+        rec[k] = (M.Number(rec[k]) and rec[k] or 0) + (M.Number(add[k]) and add[k] or 0)
+    end
+end
+
+-- Profit in one day's (or a summed) record.
+function M.LedgerProfit(rec)
+    local s, a = rec and rec.s, rec and rec.a
+    local snipe = s and (s.value or 0) - (s.spent or 0) or 0
+    local sales = a and a.profit or 0
+    return snipe + sales, snipe, sales
+end
+
+-- Totals of every day from `from` to `to` (inclusive keys; either may be nil).
+function M.LedgerSum(days, from, to)
+    local out, n = { s = {}, a = {} }, 0
+    for source, fields in pairs(M.LEDGER_FIELDS) do
+        for _, k in ipairs(fields) do out[source][k] = 0 end
+    end
+    for key, day in pairs(type(days) == "table" and days or {}) do
+        if M.IsDayKey(key) and (not from or key >= from) and (not to or key <= to) then
+            n = n + 1
+            for source in pairs(M.LEDGER_FIELDS) do
+                if type(day[source]) == "table" then M.LedgerAdd(out, source, day[source]) end
+            end
+        end
+    end
+    out.days = n
+    out.profit, out.snipe, out.sales = M.LedgerProfit(out)
+    return out
+end

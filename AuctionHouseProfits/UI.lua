@@ -284,6 +284,15 @@ function U:Build()
     status:SetPoint("LEFT", sort, "RIGHT", 8, 0)
     status:SetJustifyH("RIGHT")
     self.status = status
+    local statusHover = CreateFrame("Frame", nil, top)
+    statusHover:SetAllPoints(status)
+    statusHover:SetScript("OnEnter", function(self)
+        if not GameTooltip or not ns.Earnings then return end
+        GameTooltip:SetOwner(self, "ANCHOR_TOP")
+        ns.Earnings:Tooltip(GameTooltip, time())
+        GameTooltip:Show()
+    end)
+    statusHover:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
 
     -- Body
     local body = section(panel)
@@ -1012,8 +1021,10 @@ function U:RefreshList()
     local sources = P:Available()
     local labels = {}
     for _, key in ipairs(sources) do labels[#labels + 1] = P.SOURCES[key].label end
+    local all = ns.Earnings and ns.Earnings.Periods(time())[4].sum.profit
     self.status:SetText((P.ahOpen and color(GOOD, "AH open") or color(MUTED, "AH closed")) ..
-        (#labels > 0 and color(MUTED, " · " .. table.concat(labels, ", ")) or ""))
+        (#labels > 0 and color(MUTED, " · " .. table.concat(labels, ", ")) or "") ..
+        (all and (color(MUTED, " · made ") .. Money(all, true, true)) or ""))
     self:CaptionFilter()
     for _, o in ipairs(self.sorts or {}) do
         if o.value == sort then self:Caption(self.sortDropdown, o.label) end

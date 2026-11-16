@@ -46,6 +46,15 @@ A panel beside the auction house finds auctions you can buy for less than a vend
 
 The game only lets an add-on buy from a click or key press, so nothing is ever bought in the background.
 
+## What it's made you
+
+The add-on keeps a running total of what it has made you, by day and for good, shared by every character on the account:
+
+- **Sniper buys:** what a vendor pays for them, less what you paid. It's counted when the purchase goes through, so sell them to a vendor to collect it.
+- **Auction sales** of items whose cost it knows (what you paid a vendor): the sale after the AH cut, less the cost. Sales of anything else aren't counted. Sales are seen when your auctions list shows them as sold.
+
+The sniper panel shows today and the total, and the Profits tab shows the total. Hover either for today, the last 7 and 30 days, all time, where it came from and the last week day by day. `/ahp made` prints the same to chat.
+
 ## How it learns prices
 
 - **Vendor prices:** open any merchant and the add-on records what they charge and your standing with them. Turn this off in Options. Goods sold by many vendors keep every vendor. Costs use the one that's cheapest at your standing, which normally means the vendor you're on the best terms with. Hover **Your cost** to see them all.

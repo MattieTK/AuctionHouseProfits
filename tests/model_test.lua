@@ -376,4 +376,23 @@ test("vendor snipe: estimate from a full scan", function()
     assert(M.EstimateDeal({ 1, 60 }, 50, 0, "unit") == nil)
 end)
 
+test("earnings ledger sums days by range", function()
+    assert(M.IsDayKey("2026-11-16") and not M.IsDayKey("16/11/2026") and not M.IsDayKey(5))
+    local days = {}
+    days["2026-11-10"] = {}
+    M.LedgerAdd(days["2026-11-10"], "s", { n = 1, units = 4, spent = 100, value = 160 })
+    M.LedgerAdd(days["2026-11-10"], "s", { n = 1, units = 1, spent = 800, value = 825 })
+    days["2026-11-16"] = {}
+    M.LedgerAdd(days["2026-11-16"], "a", { n = 1, units = 13, gross = 27300, net = 25935, profit = 7215, costed = 1 })
+    M.LedgerAdd(days["2026-11-16"], "a", { n = 1, units = 1, gross = 500, net = 475, profit = 0, costed = 0 })
+    days.bogus = { s = { n = 9, spent = 0, value = 99999 } }
+    local all = M.LedgerSum(days)
+    assert(all.days == 2 and all.s.n == 2 and all.s.units == 5 and all.snipe == 85)
+    assert(all.a.n == 2 and all.a.costed == 1 and all.sales == 7215 and all.profit == 7300)
+    local recent = M.LedgerSum(days, "2026-11-11")
+    assert(recent.days == 1 and recent.snipe == 0 and recent.profit == 7215)
+    assert(M.LedgerSum(days, nil, "2026-11-10").profit == 85)
+    assert(M.LedgerProfit(nil) == 0)
+end)
+
 print(total .. " model tests passed")

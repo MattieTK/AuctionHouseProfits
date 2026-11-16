@@ -575,6 +575,9 @@ test("Auctions tab strip: relist, undercut/match and what your auctions made", f
     W.event("OWNED_AUCTIONS_UPDATED"); settle()
     local n = 0; for _ in pairs(AuctionHouseProfitsData.sales) do n = n + 1 end
     assert(n == 1, "each sale recorded once")
+    local day = AuctionHouseProfitsData.ledger[ns.Data.DayKey(time())]
+    assert(day and day.a.n == 1 and day.a.costed == 1 and day.a.gross == 27300 and day.a.profit == 7215,
+        "the sale is in the earnings ledger, once")
     -- 27300 - 1365 cut - 13 x 1440 = 7215
     assert(B.owned:GetText():find("13 sold") and B.owned:GetText():find("7 listed"), B.owned:GetText())
     assert(B.owned:GetText():find("C7215"), "profit on sold auctions: " .. B.owned:GetText())
@@ -676,7 +679,7 @@ test("the sniper sits beside the auction house and shows when it opens", functio
     assert(SV.scanButton:GetText() == "Full scan" and SV.buyButton:GetText() == "No deals")
     assert(not SV.buyButton:IsEnabled())
     assert(SV.minimum.boxes[2]:GetText() == "1" and SV.minimum.boxes[3]:GetText() == "0", "1 silver by default")
-    assert(SV.bags:GetText():find("12 bag slots"))
+    assert(SV.bags:GetText():find("12 free slots"))
     assert(type(AuctionHouseProfits_SnipeBuy) == "function" and BINDING_NAME_AUCTIONHOUSEPROFITS_SNIPE_BUY)
     local xml = io.open("AuctionHouseProfits/Bindings.xml"):read("*a")
     assert(xml:find("AUCTIONHOUSEPROFITS_SNIPE_BUY") and xml:find("AuctionHouseProfits_SnipeBuy%(%)"), "key binding declared")
@@ -882,6 +885,65 @@ test("/ahp snipe and the Sniper button show and hide it", function()
     ah:Hide(); W.event("AUCTION_HOUSE_CLOSED"); settle()
     assert(not SV:IsShown())
     assert(SV.frame:IsShown(), "comes back next time the AH opens")
+end)
+
+test("what the addon made you is kept for good, by day", function()
+    local D, E = ns.Data, ns.Earnings
+    local now = time()
+    local today = AuctionHouseProfitsData.ledger[D.DayKey(now)]
+    local s = SN.session
+    assert(today.s.n == s.buys and today.s.units == s.units and today.s.spent == s.spent and today.s.value == s.value,
+        "every sniper buy is recorded")
+    local all = E.Periods(now)[4].sum
+    assert(all.profit == (s.value - s.spent) + 7215 and all.snipe == s.value - s.spent and all.sales == 7215)
+    -- An older day counts in all but not today.
+    AuctionHouseProfitsData.ledger[D.DayKey(now - 10 * 86400)] = { s = { n = 1, units = 3, spent = 100, value = 400 } }
+    local p = E.Periods(now)
+    assert(p[1].sum.profit == all.profit and p[2].sum.profit == all.profit, "today and this week")
+    assert(p[3].sum.profit == all.profit + 300 and p[4].sum.profit == all.profit + 300, "30 days and in all")
+    -- Shown in the sniper panel and on the Profits tab, with a tooltip.
+    ah:Show(); W.event("AUCTION_HOUSE_SHOW"); settle()
+    SV:Refresh()
+    assert(SV.made.text:GetText():find("Made") and SV.made.text:GetText():find("in all"), SV.made.text:GetText())
+    local lines = {}
+    local add, add2 = GameTooltip.AddLine, GameTooltip.AddDoubleLine
+    GameTooltip.AddLine = function(_, text) lines[#lines + 1] = text end
+    GameTooltip.AddDoubleLine = function(_, a, b) lines[#lines + 1] = a .. " = " .. b end
+    SV.made:GetScript("OnEnter")(SV.made)
+    GameTooltip.AddLine, GameTooltip.AddDoubleLine = add, add2
+    local text = table.concat(lines, "\n")
+    assert(text:find("Made by Auction House Profits") and text:find("Today = ") and text:find("In all = "))
+    assert(text:find("Vendor sniper: " .. (s.buys + 1) .. " buys") and text:find("Auction sales: 1 sale with a known cost"), text)
+    assert(text:find("Last 7 days"), text)
+    -- /ahp made prints it to chat.
+    local handler
+    for key, fn in pairs(SlashCmdList) do if key:upper():find("AUCTIONHOUSEPROFITS") then handler = handler or fn end end
+    local before = #DEFAULT_CHAT_FRAME.lines
+    handler("made")
+    assert(DEFAULT_CHAT_FRAME.lines[before + 1]:find("Made today"), DEFAULT_CHAT_FRAME.lines[before + 1])
+    assert(#DEFAULT_CHAT_FRAME.lines >= before + 4)
+    AuctionHouseProfitsData.ledger[D.DayKey(now - 10 * 86400)] = nil
+end)
+
+test("the ledger starts from sales already on record, and survives a reload", function()
+    local D, saved = ns.Data, AuctionHouseProfitsData
+    local now = time()
+    AuctionHouseProfitsData = { version = 2, items = {}, sales = {
+        [1] = { id = 2320, qty = 10, gross = 1000, time = now - 3 * 86400, unitCost = 50, cutRate = 0.05 },
+        [2] = { id = 2321, qty = 1, gross = 500, time = now - 86400 }, -- no known cost
+    } }
+    assert(D:Load(now))
+    local sum = ns.Earnings.Periods(now)[4].sum
+    assert(sum.a.n == 2 and sum.a.costed == 1 and sum.sales == 1000 - 50 - 500, "seeded from the sales on record")
+    assert(D:LedgerSince() == now - 3 * 86400)
+    AuctionHouseProfitsData.ledger["junk"] = 5
+    AuctionHouseProfitsData.ledger[D.DayKey(now)] = { s = { n = "x", units = 1, spent = 10, value = 30 } }
+    assert(D:Load(now))
+    assert(AuctionHouseProfitsData.ledger.junk == nil, "bad days dropped")
+    assert(ns.Earnings.Periods(now)[4].sum.a.n == 2, "not seeded twice")
+    assert(ns.Earnings.Periods(now)[1].sum.snipe == 20)
+    AuctionHouseProfitsData = saved
+    assert(D:Load(now))
 end)
 
 test("settings changes redraw an open view", function()
