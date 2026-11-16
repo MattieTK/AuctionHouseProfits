@@ -40,6 +40,9 @@ function ns.ConfigureSettings(app)
             recordMerchants = { type = "boolean", default = true, label = "Record vendor prices when I visit merchants" },
             openOnProfitsTab = { type = "boolean", default = false, label = "Open the auction house on the Profits tab" },
             theme = { type = "enum", default = "forever", values = { "forever", "modern" }, label = "Theme" },
+            snipeMinProfit = { type = "integer", default = 100, min = 0, max = 100000000, label = "Sniper minimum profit (copper)" },
+            snipeBasis = { type = "enum", default = "unit", values = { "unit", "buy" }, label = "Minimum profit applies to" },
+            snipeShow = { type = "boolean", default = true, label = "Show the vendor sniper beside the auction house" },
         },
     })
 end
@@ -133,6 +136,17 @@ function ns.ConfigureOptions(app, SND)
                         { value = "zero", label = "Write off" },
                     } },
                     { type = "number", key = "defaultStacks", label = "Default number of stacks" },
+                } },
+            } },
+            { id = "sniper", label = "Sniper", sections = {
+                { title = "Vendor sniper", controls = {
+                    { type = "checkbox", key = "snipeShow", label = "Show the vendor sniper beside the auction house" },
+                    { type = "number", key = "snipeMinProfit", label = "Minimum profit (copper)",
+                      hint = "100 = 1 silver. You can also type it in gold, silver and copper on the panel." },
+                    { type = "select", key = "snipeBasis", label = "Minimum profit applies to", choices = {
+                        { value = "unit", label = "Each unit" },
+                        { value = "buy", label = "Each purchase" },
+                    } },
                 } },
             } },
             { id = "reputation", label = "Reputation", sections = {

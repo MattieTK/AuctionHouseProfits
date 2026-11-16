@@ -1,0 +1,8 @@
+<Bindings>
+	<Binding name="AUCTIONHOUSEPROFITS_SNIPE_BUY" header="AUCTIONHOUSEPROFITS" category="ADDONS">
+		AuctionHouseProfits_SnipeBuy()
+	</Binding>
+	<Binding name="AUCTIONHOUSEPROFITS_SNIPE_SKIP" category="ADDONS">
+		AuctionHouseProfits_SnipeSkip()
+	</Binding>
+</Bindings>

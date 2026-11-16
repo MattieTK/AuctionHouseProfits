@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0
+
+- **Vendor sniper.** A panel beside the auction house finds auctions you can buy for less than a vendor pays, and buys them **one press at a time without moving the mouse**: the Buy button stays put and each press buys the deal at the top of the list. Right-click it to skip a deal. Both are also key bindings (Key Bindings → AddOns → Auction House Profits).
+- **Minimum profit in gold, silver and copper boxes**, per unit (every unit must make it) or per purchase (one press must make it in all).
+- **Full scan** reads every auction at once (the game allows one every 15 minutes per account). In between, **Recheck** searches the items that had deals before, and any search you run on the Buy page is checked too.
+- Each deal is checked against the live listings before you press Buy. Trade goods buy every profitable unit in one press, and the purchase is only confirmed if the server's price is still a deal; otherwise it's cancelled. Gear buys one auction per press, most profitable first. Your own auctions are never bought.
+- Shows what you've bought since login against what vendors pay, and warns when your bags are full.
+- `/ahp snipe`, or the **Sniper** button on the Profits tab, shows or hides it.
+
 ## 0.3.2
 
 - **Items sold by many vendors keep every vendor,** not just the last one you visited. Costs use the vendor that's cheapest at your current standing with each. List prices are normally the same, so that's the vendor you're on the best terms with: Honored with one city beats Friendly with another. On a tie it prefers unlimited stock, then the vendor seen most recently.

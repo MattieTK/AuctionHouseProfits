@@ -1,7 +1,7 @@
 local ADDON, ns = ...
 local M, D, P, R, U, T = ns.Model, ns.Data, ns.Prices, ns.Merchant, ns.UI, ns.AuctionTab
-local S, B = ns.Post, ns.AuctionsBar
-local VERSION = "0.3.2"
+local S, B, N, SP = ns.Post, ns.AuctionsBar, ns.Snipe, ns.SnipePanel
+local VERSION = "0.4.0"
 
 -- WoW Forever only (interface 16001). Other clients have different AH rules.
 local interface = select(4, GetBuildInfo())
@@ -92,6 +92,7 @@ end
 local function attachAH()
     T:Attach(app, core)
     B:Attach(app, core)
+    SP:Attach(app, core)
 end
 
 app:OnReady(function()
@@ -99,6 +100,10 @@ app:OnReady(function()
     P:Attach(core)
     P.after = function(delay, key, fn) core:After(delay, key, fn) end
     P:OnChange(function() publish() end)
+    N.after = function(delay, key, fn) core:After(delay, key, fn) end
+    N:Attach(app, core)
+    N:OnChange(function() SP:RequestRefresh() end)
+    P:OnChange(function() SP:RequestRefresh() end)
     S:Attach(app, core)
     S:OnChange(function(id)
         publish()
@@ -147,11 +152,13 @@ end
 
 local function slash(args)
     local cmd = (args or ""):lower():match("^%s*(%S*)")
-    if cmd == "options" or cmd == "config" then
+    if cmd == "snipe" or cmd == "sniper" then
+        SP:Toggle()
+    elseif cmd == "options" or cmd == "config" then
         local ok, err = ns.Options:Toggle()
         if not ok then say(err.message) end
     elseif cmd == "help" then
-        say("/ahp opens the calculator, /ahp options opens settings. At the auction house, use the Profits tab.")
+        say("/ahp opens the calculator, /ahp snipe shows or hides the vendor sniper, /ahp options opens settings. At the auction house, use the Profits tab.")
     else
         U:ToggleWindow()
     end

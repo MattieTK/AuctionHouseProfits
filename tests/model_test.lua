@@ -309,4 +309,54 @@ test("sale profit and quotes", function()
     near(q.profitUnit, q.profit / 20, 1e-9)
 end)
 
+test("vendor snipe: per unit or per purchase", function()
+    -- A vendor pays 50c each; you want 10c.
+    assert(M.VendorDeal(40, 1, 50, 10, "unit") == 10)
+    assert(M.VendorDeal(41, 1, 50, 10, "unit") == nil, "9c short")
+    assert(M.VendorDeal(450, 10, 50, 10, "unit") == nil, "5c a unit isn't 10c a unit")
+    assert(M.VendorDeal(450, 10, 50, 10, "buy") == 50, "50c in all clears 10c a purchase")
+    assert(M.VendorDeal(50, 1, 50, 0, "buy") == nil, "break-even is no deal")
+    assert(M.VendorDeal(49, 1, 50, 0, "unit") == 1)
+    assert(M.VendorDeal(1, 1, 0, 0, "unit") == nil, "vendors won't buy it")
+    assert(M.SnipeLimit(10, 50, 10, "unit") == 400 and M.SnipeLimit(10, 50, 10, "buy") == 490)
+end)
+
+test("vendor snipe: commodities take the cheap end, skip your own, stop at your gold", function()
+    local levels = { { price = 30, qty = 5, mine = 2 }, { price = 38, qty = 4, mine = 0 },
+        { price = 45, qty = 100, mine = 0 } }
+    local b = M.CommodityBuy(levels, 50, 10, "unit")
+    assert(b.qty == 7 and b.cost == 3 * 30 + 4 * 38 and b.profit == 7 * 50 - b.cost, "45c leaves 5c a unit")
+    b = M.CommodityBuy(levels, 50, 10, "buy")
+    assert(b.qty == 107 and b.profit == 107 * 50 - (90 + 152 + 4500), "every profitable unit when counting per purchase")
+    b = M.CommodityBuy(levels, 50, 10, "unit", 150)
+    assert(b.qty == 4 and b.cost == 128, "3 at 30c and 1 at 38c is all 1s 50c buys")
+    assert(M.CommodityBuy(levels, 50, 10, "unit", 20) == nil, "can't afford one")
+    assert(M.CommodityBuy({ { price = 49, qty = 1, mine = 0 } }, 50, 500, "buy") == nil, "1c in all")
+    assert(M.CommodityBuy({}, 50, 0, "unit") == nil)
+end)
+
+test("vendor snipe: item auctions best first, never your own", function()
+    local auctions = {
+        { auctionID = 1, qty = 1, buyout = 80, mine = false },
+        { auctionID = 2, qty = 1, buyout = 20, mine = false },
+        { auctionID = 3, qty = 1, buyout = 10, mine = true },
+        { auctionID = 4, qty = 2, buyout = 50, mine = false },
+    }
+    local b = M.ItemBuys(auctions, 100, 25, "unit")
+    assert(#b.auctions == 2 and b.auctions[1].auctionID == 4 and b.auctions[2].auctionID == 2, "most profit first")
+    assert(b.qty == 3 and b.cost == 70 and b.profit == 80 + 150)
+    b = M.ItemBuys(auctions, 100, 25, "unit", 40)
+    assert(#b.auctions == 1 and b.auctions[1].auctionID == 2, "only what you can pay for")
+    assert(M.ItemBuys(auctions, 100, 1000, "unit") == nil)
+end)
+
+test("vendor snipe: estimate from a full scan", function()
+    -- Three auctions: 5 for 100c, 1 for 60c, 10 for 450c; vendor pays 50c.
+    local e = M.EstimateDeal({ 5, 100, 1, 60, 10, 450 }, 50, 10, "unit")
+    assert(e.qty == 5 and e.cost == 100 and e.profit == 150, "10 for 450c is only 5c a unit")
+    e = M.EstimateDeal({ 5, 100, 1, 60, 10, 450 }, 50, 10, "buy")
+    assert(e.qty == 15 and e.cost == 550 and e.profit == 150 + 50)
+    assert(M.EstimateDeal({ 1, 60 }, 50, 0, "unit") == nil)
+end)
+
 print(total .. " model tests passed")

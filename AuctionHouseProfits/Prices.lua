@@ -104,10 +104,11 @@ function P:CanScan()
     return true
 end
 
-function P:Scan(id)
+-- key: an item key to search instead of the plain one for id (a variant).
+function P:Scan(id, key)
     local ok, why = self:CanScan()
     if not ok then return false, why end
-    local key = C_AuctionHouse.MakeItemKey(id)
+    key = key or C_AuctionHouse.MakeItemKey(id)
     local sorts = {}
     if Enum and Enum.AuctionHouseSortOrder then
         sorts[1] = { sortOrder = Enum.AuctionHouseSortOrder.Price, reverseSort = false }

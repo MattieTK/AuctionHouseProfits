@@ -551,3 +551,86 @@ function M.MedianDiscount(ratios)
     local pct = (1 - median) * 100
     return max(0, floor(pct * 2 + 0.5) / 2), #list
 end
+
+---------------------------------------------------------------------------
+-- Vendor sniping: auctions a vendor would pay more for than they cost
+---------------------------------------------------------------------------
+-- basis "unit": every unit must make minProfit. "buy": what one purchase
+-- makes in all must reach minProfit. Either way at least 1c.
+local function snipeNeed(minProfit, basis, qty)
+    local m = max(1, M.Number(minProfit) and minProfit or 0)
+    if basis == "unit" then return m * qty end
+    return m
+end
+
+-- Profit selling qty units bought for total to a vendor at sell each, or
+-- nil when it doesn't clear the minimum.
+function M.VendorDeal(total, qty, sell, minProfit, basis)
+    if not M.Number(total) or not M.Number(qty) or qty <= 0 or not M.Number(sell) or sell <= 0 then return nil end
+    local profit = sell * qty - total
+    if profit < snipeNeed(minProfit, basis, qty) then return nil end
+    return profit
+end
+
+-- The most a commodity purchase of qty units may cost once the server quotes
+-- it. Above this it is no longer a deal.
+function M.SnipeLimit(qty, sell, minProfit, basis)
+    return sell * qty - snipeNeed(minProfit, basis, qty)
+end
+
+-- What to buy of a commodity. levels: cheapest first, { price, qty, mine }.
+-- A purchase takes the cheapest units, so take units while each one is
+-- profitable (by minProfit, for "unit") and you can pay. nil if nothing.
+function M.CommodityBuy(levels, sell, minProfit, basis, money)
+    if not M.Number(sell) or sell <= 0 or type(levels) ~= "table" then return nil end
+    local unitNeed = basis == "unit" and max(1, M.Number(minProfit) and minProfit or 0) or 1
+    local qty, cost = 0, 0
+    for _, l in ipairs(levels) do
+        if not M.Number(l.price) or sell - l.price < unitNeed then break end
+        local take = (l.qty or 0) - (l.mine or 0)
+        if M.Number(money) and l.price > 0 then take = min(take, floor((money - cost) / l.price)) end
+        if take > 0 then
+            qty, cost = qty + take, cost + take * l.price
+        end
+        if M.Number(money) and money - cost < l.price then break end
+    end
+    if qty == 0 then return nil end
+    local profit = M.VendorDeal(cost, qty, sell, minProfit, basis)
+    if not profit then return nil end
+    return { qty = qty, cost = cost, profit = profit }
+end
+
+-- Which item (non-commodity) auctions to buy, best first. auctions:
+-- { auctionID, qty, buyout (whole auction), mine }. nil if none qualify.
+function M.ItemBuys(auctions, sell, minProfit, basis, money)
+    if type(auctions) ~= "table" then return nil end
+    local list, qty, cost, profit = {}, 0, 0, 0
+    for _, a in ipairs(auctions) do
+        local p = not a.mine and (not M.Number(money) or (M.Number(a.buyout) and a.buyout <= money))
+            and M.VendorDeal(a.buyout, a.qty, sell, minProfit, basis)
+        if p then
+            list[#list + 1] = { auctionID = a.auctionID, qty = a.qty, buyout = a.buyout, profit = p }
+            qty, cost, profit = qty + a.qty, cost + a.buyout, profit + p
+        end
+    end
+    if #list == 0 then return nil end
+    table.sort(list, function(a, b)
+        if a.profit ~= b.profit then return a.profit > b.profit end
+        if a.buyout ~= b.buyout then return a.buyout < b.buyout end
+        return (a.auctionID or 0) < (b.auctionID or 0)
+    end)
+    return { auctions = list, qty = qty, cost = cost, profit = profit }
+end
+
+-- An estimate from a full-scan snapshot. flat = { count1, buyout1, count2,
+-- buyout2, ... } for every auction of one item.
+function M.EstimateDeal(flat, sell, minProfit, basis)
+    if type(flat) ~= "table" then return nil end
+    local qty, cost, profit = 0, 0, 0
+    for i = 1, #flat - 1, 2 do
+        local p = M.VendorDeal(flat[i + 1], flat[i], sell, minProfit, basis)
+        if p then qty, cost, profit = qty + flat[i], cost + flat[i + 1], profit + p end
+    end
+    if qty == 0 then return nil end
+    return { qty = qty, cost = cost, profit = profit }
+end

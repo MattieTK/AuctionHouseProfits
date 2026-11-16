@@ -628,6 +628,214 @@ test("open-on-Profits setting", function()
     assert(ns.App:Set("openOnProfitsTab", false))
 end)
 
+-- Vendor sniper -----------------------------------------------------------------
+ITEMS[9999] = { "Rusty Sword", "|cffffffff|Hitem:9999::::::::60:::::|h[Rusty Sword]|h|r", 1, 10, 5, "Weapon", "Swords", 1, "", 135274, 300 }
+ITEMS[15000] = { "Quest Thing", "|cffffffff|Hitem:15000::::::::60:::::|h[Quest Thing]|h|r", 1, 1, 1, "Quest", "Quest", 1, "", 134400, 0 }
+cached[15000] = true -- 9999 loads after the scan has been read
+local replicate = {
+    { id = 14047, count = 10, buyout = 2000 },               -- 2s a unit, vendor pays 4s: a deal
+    { id = 14047, count = 5, buyout = 2500 },                -- 5s a unit: no
+    { id = 14047, count = 3, buyout = 300, owner = "Me" },   -- your own auction: never
+    { id = 9999, count = 1, buyout = 150 },                  -- vendor pays 3s: a deal
+    { id = 9999, count = 1, buyout = 250 },                  -- 50c: under the 1s minimum
+    { id = 15000, count = 1, buyout = 1 },                   -- vendors won't buy it
+    { id = 2320, count = 20, buyout = 20 },                  -- 1c a unit: under the minimum
+}
+local purchases, bids, itemResults = {}, {}, {}
+C_AuctionHouse.ReplicateItems = function() replicate.asked = (replicate.asked or 0) + 1 end
+C_AuctionHouse.GetNumReplicateItems = function() return #replicate end
+C_AuctionHouse.GetReplicateItemInfo = function(i)
+    local r = replicate[i + 1]
+    if not r then return end
+    return nil, nil, r.count, 1, true, 1, nil, 0, 0, r.buyout, 0, nil, nil, r.owner, nil, 0, r.id, true
+end
+C_AuctionHouse.StartCommoditiesPurchase = function(id, qty) purchases[#purchases + 1] = { start = id, qty = qty } end
+C_AuctionHouse.ConfirmCommoditiesPurchase = function(id, qty) purchases[#purchases + 1] = { confirm = id, qty = qty } end
+C_AuctionHouse.CancelCommoditiesPurchase = function() purchases[#purchases + 1] = { cancel = true } end
+C_AuctionHouse.PlaceBid = function(auctionID, amount) bids[#bids + 1] = { auctionID = auctionID, amount = amount } end
+C_AuctionHouse.GetNumItemSearchResults = function(key) return itemResults[key.itemID] and #itemResults[key.itemID] or 0 end
+C_AuctionHouse.GetItemSearchResultInfo = function(key, i) return itemResults[key.itemID][i] end
+C_Container.GetContainerNumFreeSlots = function(bag) return bag == 0 and 12 or 0 end
+local runecloth = commodity[14047]
+local cheapBook = {
+    { unitPrice = 200, quantity = 6, numOwnerItems = 0, totalNumberOfOwners = 1, owners = { "Ann" } },
+    { unitPrice = 290, quantity = 4, numOwnerItems = 0, totalNumberOfOwners = 1, owners = { "Cy" } },
+    { unitPrice = 350, quantity = 3, numOwnerItems = 0, totalNumberOfOwners = 1, owners = { "Di" } }, -- only 50c a unit
+    { unitPrice = 2100, quantity = 40, numOwnerItems = 0, totalNumberOfOwners = 1, owners = { "Bob" } },
+}
+local SN, SV = ns.Snipe, ns.SnipePanel
+local function press(mouse) SV.buyButton:GetScript("OnClick")(SV.buyButton, mouse or "LeftButton"); settle() end
+
+test("the sniper sits beside the auction house and shows when it opens", function()
+    assert(SV.attached and AuctionHouseProfitsSniper and AuctionHouseProfitsSnipeBuyButton, "built with the AH")
+    assert(SV.frame:GetParent() == ah)
+    W.event("AUCTION_HOUSE_SHOW"); ah:Show()
+    SV.frame:Hide(); SV.frame:Show() -- in game OnShow fires as the AH opens
+    settle()
+    assert(SV:IsShown() and SV.scope, "background work runs while visible")
+    assert(SV.scanButton:GetText() == "Full scan" and SV.buyButton:GetText() == "No deals")
+    assert(not SV.buyButton:IsEnabled())
+    assert(SV.minimum.boxes[2]:GetText() == "1" and SV.minimum.boxes[3]:GetText() == "0", "1 silver by default")
+    assert(SV.bags:GetText():find("12 bag slots"))
+    assert(type(AuctionHouseProfits_SnipeBuy) == "function" and BINDING_NAME_AUCTIONHOUSEPROFITS_SNIPE_BUY)
+    local xml = io.open("AuctionHouseProfits/Bindings.xml"):read("*a")
+    assert(xml:find("AUCTIONHOUSEPROFITS_SNIPE_BUY") and xml:find("AuctionHouseProfits_SnipeBuy%(%)"), "key binding declared")
+end)
+
+test("a full scan finds auctions below vendor price", function()
+    SV.scanButton:GetScript("OnClick")(SV.scanButton); settle()
+    assert(replicate.asked == 1 and SN.full and SV.scanButton:GetText() == "Scanning...")
+    W.event("REPLICATE_ITEM_LIST_UPDATE"); settle()
+    assert(SN.full and SN.full.stage == "prices" and SN.full.left == 1, "waits for the sword's vendor price")
+    assert(SV.status:GetText():find("Loading vendor prices"))
+    cached[9999] = true
+    W.tick(1.1); settle()
+    assert(not SN.full and SN.snapshot.total == 7)
+    local deals = SN:Deals()
+    assert(#deals == 2, "two deals, got " .. #deals)
+    local cloth, sword = SN.byID[14047], SN.byID[9999]
+    assert(cloth.qty == 10 and cloth.cost == 2000 and cloth.profit == 2000 and not cloth.verified)
+    assert(sword.qty == 1 and sword.profit == 150, "one sword clears 1s")
+    assert(not SN.byID[15000] and not SN.byID[2320], "unsellable and too-thin skipped")
+    assert(SV.scanButton:GetText() == "Recheck" and SV.status:GetText():find("full scan in"), SV.status:GetText())
+    assert(#SV.listBox.rows == 2 and SV.listBox.rows[1].data.id == 14047, "most profit first")
+    assert(SV.listBox.rows[1].profit:GetText():find("~"), "estimates are marked")
+end)
+
+test("deals are checked against live listings before you press Buy", function()
+    commodity[14047] = cheapBook
+    assert(SN.checking == 14047 and searches[#searches] == 14047, "the top deal is searched by itself")
+    assert(SV.buyButton:GetText() == "Checking...")
+    W.event("COMMODITY_SEARCH_RESULTS_UPDATED", 14047); settle()
+    local cloth = SN.byID[14047]
+    assert(cloth.verified and cloth.kind == "commodity" and cloth.buy.qty == 10 and cloth.buy.cost == 6 * 200 + 4 * 290,
+        "every unit making 1s or more")
+    assert(cloth.profit == 4000 - 2360)
+    -- Then the next one.
+    assert(SN.checking == 9999 and searches[#searches] == 9999)
+    itemResults[9999] = {
+        { auctionID = 71, quantity = 1, buyoutAmount = 150, containsOwnerItem = false },
+        { auctionID = 72, quantity = 1, buyoutAmount = 120, containsOwnerItem = false },
+        { auctionID = 73, quantity = 1, buyoutAmount = 290, containsOwnerItem = false },
+    }
+    W.event("ITEM_SEARCH_RESULTS_UPDATED", { itemID = 9999 }); settle()
+    local sword = SN.byID[9999]
+    assert(sword.verified and sword.kind == "item" and #sword.buy.auctions == 2 and sword.buy.auctions[1].auctionID == 72)
+    assert(SV.buyButton:GetText() == "Buy  +C" .. 1640, SV.buyButton:GetText())
+    assert(SV.nextName:GetText():find("10 x") and SV.nextDetail:GetText():find("C2360"), SV.nextDetail:GetText())
+end)
+
+test("one press buys every profitable unit of a trade good, confirmed at the server's price", function()
+    press()
+    assert(purchases[#purchases].start == 14047 and purchases[#purchases].qty == 10)
+    assert(SN:IsBusy() and SV.buyButton:GetText() == "Buying..." and not SV.buyButton:IsEnabled())
+    press() -- a second press while waiting buys nothing
+    assert(#purchases == 1)
+    W.event("COMMODITY_PRICE_UPDATED", 236, 2360); settle()
+    assert(purchases[2].confirm == 14047 and purchases[2].qty == 10, "confirmed without another press")
+    commodity[14047] = { cheapBook[3], cheapBook[4] } -- the cheap units are gone
+    W.event("COMMODITY_PURCHASE_SUCCEEDED"); settle()
+    assert(not SN:IsBusy() and SN.session.units == 10 and SN.session.spent == 2360 and SN.session.value == 4000)
+    assert(SV.session:GetText():find("10 bought"))
+    assert(not SN.byID[14047] or not SN.byID[14047].verified, "re-read before buying more")
+    if SN.checking ~= 14047 then settle() end
+    W.event("COMMODITY_SEARCH_RESULTS_UPDATED", 14047); settle()
+    assert(not SN.byID[14047], "nothing left under vendor price")
+end)
+
+test("one press buys one auction, the most profitable first", function()
+    assert(SN:Head().id == 9999)
+    assert(searches[#searches] == 9999, "the top gear deal's search is kept the latest")
+    W.event("ITEM_SEARCH_RESULTS_UPDATED", { itemID = 9999 }); settle()
+    press()
+    assert(bids[1].auctionID == 72 and bids[1].amount == 120)
+    W.event("AUCTION_HOUSE_PURCHASE_COMPLETED", 72); settle()
+    assert(SN.session.buys == 2 and SN.byID[9999].verified and #SN.byID[9999].buy.auctions == 1)
+    press()
+    assert(bids[2].auctionID == 71)
+    W.event("AUCTION_HOUSE_SHOW_ERROR", 1); settle() -- someone else got it
+    assert(not SN:IsBusy() and SN.session.buys == 2, "a failed buy costs nothing")
+    assert(not SN.byID[9999].verified, "checks the listings again")
+    itemResults[9999] = {}
+    W.event("ITEM_SEARCH_RESULTS_UPDATED", { itemID = 9999 }); settle()
+    assert(#SN:Deals() == 0 and SV.buyButton:GetText() == "No deals")
+end)
+
+test("a trade good whose price rose is cancelled, not bought", function()
+    commodity[14047] = cheapBook
+    W.event("COMMODITY_SEARCH_RESULTS_UPDATED", 14047); settle() -- e.g. you searched it on the Buy page
+    assert(SN.byID[14047] and SN.byID[14047].verified, "any search can turn up a deal")
+    local before = #purchases
+    press()
+    -- The limit is 10 x (4s vendor - 1s minimum) = 30s: exactly that still goes through.
+    W.event("COMMODITY_PRICE_UPDATED", 300, 3000); settle()
+    assert(purchases[before + 2].confirm == 14047)
+    W.event("COMMODITY_PURCHASE_FAILED"); settle()
+    assert(not SN:IsBusy() and SN.session.buys == 2)
+    W.event("COMMODITY_SEARCH_RESULTS_UPDATED", 14047); settle()
+    before = #purchases
+    press()
+    W.event("COMMODITY_PRICE_UPDATED", 301, 3010); settle()
+    assert(purchases[before + 2].cancel and not purchases[before + 3], "over the limit: cancelled")
+    assert(not SN:IsBusy())
+end)
+
+test("min profit in gold, silver and copper, per unit or per purchase", function()
+    W.event("COMMODITY_SEARCH_RESULTS_UPDATED", 14047); settle()
+    local boxes = SV.minimum.boxes
+    boxes[2]:SetText("2"); boxes[3]:SetText("")
+    boxes[2]:GetScript("OnEnterPressed")(boxes[2]); settle()
+    assert(ns.App:Get("snipeMinProfit") == 200)
+    assert(SN.byID[14047].buy.qty == 6, "only the 2s units make 2s each")
+    boxes[1]:SetText(""); boxes[2]:SetText("15"); boxes[3]:SetText("")
+    boxes[2]:GetScript("OnEnterPressed")(boxes[2]); settle()
+    assert(not SN.byID[14047], "nothing makes 15s a unit")
+    SV.basis:GetScript("OnClick")(SV.basis); settle()
+    assert(ns.App:Get("snipeBasis") == "buy" and SV.basis:GetText() == "per buy")
+    local cloth = SN.byID[14047]
+    assert(cloth and cloth.buy.qty == 13 and cloth.buy.cost == 3410 and cloth.profit == 13 * 400 - 3410,
+        "per purchase: every unit under 4s, as long as the whole buy makes 15s")
+    SV.basis:GetScript("OnClick")(SV.basis)
+    assert(ns.App:Set("snipeMinProfit", 100)); settle()
+end)
+
+test("right-click skips a deal until the next full scan", function()
+    assert(SN:Head().id == 14047)
+    press("RightButton")
+    assert(not SN:Head() and #purchases > 0 and SN.skipped[14047])
+    W.event("COMMODITY_SEARCH_RESULTS_UPDATED", 14047); settle()
+    assert(not SN.byID[14047], "stays skipped")
+end)
+
+test("between full scans, Recheck searches items that had deals", function()
+    local ok, why = SN:FullScan()
+    assert(not ok and why:find("next full scan"), "the game allows one every 15 minutes")
+    local before = #searches
+    SV.scanButton:GetScript("OnClick")(SV.scanButton); settle()
+    assert(ns.Prices:QueueProgress(), "rechecking")
+    assert(SV.scanButton:GetText():find("^Stop"))
+    SV.scanButton:GetScript("OnClick")(SV.scanButton); settle()
+    assert(not ns.Prices:QueueProgress())
+    assert(#searches > before and searches[before + 1] == 9999, "skipped items aren't rechecked")
+    assert(AuctionHouseProfitsData.watch[14047] and AuctionHouseProfitsData.watch[9999], "watch list saved")
+    assert(AuctionHouseProfitsData.fullScan, "full-scan time saved: the limit is account-wide")
+end)
+
+test("/ahp snipe and the Sniper button show and hide it", function()
+    local handler
+    for key, fn in pairs(SlashCmdList) do if key:upper():find("AUCTIONHOUSEPROFITS") then handler = handler or fn end end
+    handler("snipe"); settle()
+    assert(not SV.frame:IsShown() and ns.App:Get("snipeShow") == false and not SV.scope, "hidden, background work stopped")
+    ns.UI:ToggleWindow(); settle()
+    ns.UI.sniperButton:GetScript("OnClick")(ns.UI.sniperButton); settle()
+    assert(SV.frame:IsShown() and ns.App:Get("snipeShow") == true)
+    ns.UI:ToggleWindow(); settle()
+    commodity[14047] = runecloth
+    ah:Hide(); W.event("AUCTION_HOUSE_CLOSED"); settle()
+    assert(not SV:IsShown())
+    assert(SV.frame:IsShown(), "comes back next time the AH opens")
+end)
+
 test("settings changes redraw an open view", function()
     ns.UI:ToggleWindow(); settle()
     ns.UI:Select(2320); settle()

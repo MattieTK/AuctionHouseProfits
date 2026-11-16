@@ -1,11 +1,12 @@
 # Auction House Profits
 
-Is it worth buying this from a vendor and selling it on the auction house? This add-on answers that for WoW: Forever. It covers the AH cut, deposits you'll lose on listings that don't sell, faction versus neutral auction houses, and what your reputation discount changes.
+Is it worth buying this from a vendor and selling it on the auction house? This add-on answers that for WoW: Forever. It also works the other way round: its vendor sniper finds auctions a vendor will pay more for, and buys them one press at a time. It covers the AH cut, deposits you'll lose on listings that don't sell, faction versus neutral auction houses, and what your reputation discount changes.
 
 ## Where to find it
 
 - **At the auction house:** open the new **Profits** tab, after Buy, Sell, Auctions and any tabs other add-ons add.
 - **On the Auctions tab:** pick one of your items to get a post/relist strip in its header.
+- **Beside the auction house:** the vendor sniper panel. Hide it with its close button or `/ahp snipe`.
 - **Anywhere else:** type `/ahp`, or use the add-ons button by the minimap.
 - **Settings:** `/ahp options`, or the **Options** button in the window.
 
@@ -31,6 +32,19 @@ Select one of your items on Blizzard's **Auctions** tab and a strip appears in t
 - **Qty** and the price boxes set what to post; **Post** lists it from your bags.
 - The strip shows profit if it sells, the deposit, and how many units are ahead of you.
 - It also shows how many you have listed and sold, and the profit on the sold ones against what you paid.
+
+## Vendor sniper
+
+A panel beside the auction house finds auctions you can buy for less than a vendor pays, so you can buy them and sell them straight to a vendor.
+
+- Set your **Min profit** in the gold, silver and copper boxes. **each** means every unit must make that much; click it for **per buy**, where one purchase must make it in all.
+- **Full scan** reads every auction at once. The game allows one every 15 minutes per account, so in between the button becomes **Recheck**, which searches the items that had deals before. Searches you run on the Buy page are checked too.
+- Deals marked `~` are estimates from the full scan. The sniper checks each one against the live listings by itself, top of the list first.
+- **Buy** stays in the same place: each press buys the deal at the top, then the next one moves up. Trade goods buy every profitable unit in one press, and are only confirmed if the server's price is still a deal. Gear buys one auction per press. **Right-click** Buy, or press **Skip**, to pass on a deal. Click a deal in the list to buy it next.
+- For no mouse at all, bind keys under Key Bindings → AddOns → Auction House Profits.
+- `/ahp snipe` or the **Sniper** button on the Profits tab shows or hides it.
+
+The game only lets an add-on buy from a click or key press, so nothing is ever bought in the background.
 
 ## How it learns prices
 

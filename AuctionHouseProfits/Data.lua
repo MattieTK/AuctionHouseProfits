@@ -9,7 +9,8 @@ ns.Data = D
 local SCHEMA = 2
 local SALE_DAYS = 30
 local HISTORY_DAYS, HISTORY_MAX, HISTORY_MERGE = 14, 200, 5
-local TABLES = { "items", "scans", "manual", "plans", "calibration", "purchases", "sales", "history", "standings" }
+local TABLES = { "items", "scans", "manual", "plans", "calibration", "purchases", "sales", "history", "standings", "watch" }
+local WATCH_DAYS = 14
 
 local function isID(k) return type(k) == "number" and k > 0 and k == math.floor(k) end
 
@@ -105,6 +106,10 @@ local function sanitize(db, now)
             db.sales[auctionID] = nil
         end
     end
+    for id, seen in pairs(db.watch) do
+        if not isID(id) or not M.Number(seen) or (now and seen < now - WATCH_DAYS * 86400) then db.watch[id] = nil end
+    end
+    if db.fullScan ~= nil and not M.Number(db.fullScan) then db.fullScan = nil end
     for id, price in pairs(db.manual) do
         if not isID(id) or not M.Number(price) or price < 0 then db.manual[id] = nil end
     end
@@ -320,4 +325,28 @@ function D:IsVendor(npc) return npc ~= nil and self.db ~= nil and self.db.standi
 function D:ForgetVendor(id)
     local item = self.db and self.db.items[id]
     if item and not self.readOnly then item.vendor, item.vendors = nil, nil; self:Touch() end
+end
+
+-- Items the vendor sniper has found deals on, for rechecking between full
+-- scans: { [itemID] = last time seen }.
+function D:Watch(id, now)
+    if self.readOnly or not isID(id) or not M.Number(now) then return end
+    self.db.watch[id] = now
+end
+
+-- Watched item IDs, most recently seen first.
+function D:Watched(limit)
+    local list = {}
+    for id, seen in pairs(self.db and self.db.watch or {}) do list[#list + 1] = { id = id, seen = seen } end
+    table.sort(list, function(a, b) if a.seen ~= b.seen then return a.seen > b.seen end return a.id < b.id end)
+    local out = {}
+    for i = 1, math.min(#list, limit or #list) do out[i] = list[i].id end
+    return out
+end
+
+-- When this account last asked for a full scan (the game allows one every
+-- 15 minutes, account-wide).
+function D:FullScanTime() return self.db and self.db.fullScan end
+function D:SetFullScanTime(t)
+    if not self.readOnly and self.db and M.Number(t) then self.db.fullScan = t end
 end
