@@ -584,33 +584,36 @@ end
 function M.CommodityBuy(levels, sell, minProfit, basis, money)
     if not M.Number(sell) or sell <= 0 or type(levels) ~= "table" then return nil end
     local unitNeed = basis == "unit" and max(1, M.Number(minProfit) and minProfit or 0) or 1
-    local qty, cost = 0, 0
+    local qty, cost, top = 0, 0, nil
     for _, l in ipairs(levels) do
         if not M.Number(l.price) or sell - l.price < unitNeed then break end
         local take = (l.qty or 0) - (l.mine or 0)
         if M.Number(money) and l.price > 0 then take = min(take, floor((money - cost) / l.price)) end
         if take > 0 then
-            qty, cost = qty + take, cost + take * l.price
+            qty, cost, top = qty + take, cost + take * l.price, l.price
         end
         if M.Number(money) and money - cost < l.price then break end
     end
     if qty == 0 then return nil end
     local profit = M.VendorDeal(cost, qty, sell, minProfit, basis)
     if not profit then return nil end
-    return { qty = qty, cost = cost, profit = profit }
+    return { qty = qty, cost = cost, profit = profit, maxPrice = top }
 end
 
--- Which item (non-commodity) auctions to buy, best first. auctions:
--- { auctionID, qty, buyout (whole auction), mine }. nil if none qualify.
+-- Which item (non-commodity) auctions to buy, best first. The AH groups
+-- identical auctions into one row: qty is how many, buyout is the price of
+-- each, and one purchase buys one of them. auctions: { auctionID, qty,
+-- buyout (each), mine }. Each row's profit is per purchase. nil if none.
 function M.ItemBuys(auctions, sell, minProfit, basis, money)
     if type(auctions) ~= "table" then return nil end
     local list, qty, cost, profit = {}, 0, 0, 0
     for _, a in ipairs(auctions) do
-        local p = not a.mine and (not M.Number(money) or (M.Number(a.buyout) and a.buyout <= money))
-            and M.VendorDeal(a.buyout, a.qty, sell, minProfit, basis)
+        local n = M.Number(a.qty) and a.qty or 0
+        local p = n > 0 and not a.mine and (not M.Number(money) or (M.Number(a.buyout) and a.buyout <= money))
+            and M.VendorDeal(a.buyout, 1, sell, minProfit, basis)
         if p then
-            list[#list + 1] = { auctionID = a.auctionID, qty = a.qty, buyout = a.buyout, profit = p }
-            qty, cost, profit = qty + a.qty, cost + a.buyout, profit + p
+            list[#list + 1] = { auctionID = a.auctionID, qty = n, buyout = a.buyout, profit = p }
+            qty, cost, profit = qty + n, cost + a.buyout * n, profit + p * n
         end
     end
     if #list == 0 then return nil end

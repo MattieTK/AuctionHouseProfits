@@ -218,8 +218,9 @@ function P:OnItemResults(itemKey)
         local r = C_AuctionHouse.GetItemSearchResultInfo(itemKey, i)
         if type(r) == "table" and price(r.buyoutAmount) and readable(r.quantity) and M.Number(r.quantity) and r.quantity > 0 then
             local owners = type(r.owners) == "table" and r.owners or {}
+            -- Rows group identical auctions: buyoutAmount is each one's price.
             results[#results + 1] = {
-                price = r.buyoutAmount / r.quantity, qty = r.quantity,
+                price = r.buyoutAmount, qty = r.quantity,
                 mine = r.containsOwnerItem == true and r.quantity or 0, sellers = 1,
                 seller = readable(owners[1]) and type(owners[1]) == "string" and owners[1] or nil,
             }

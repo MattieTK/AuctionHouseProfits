@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.1
+
+From in-game testing.
+
+- **Fixed: the vendor sniper counted grouped gear auctions as one stack.** The auction house groups identical auctions into one row: "8s 27c · 32" is 32 auctions at 8s 27c each, not 32 items for 8s 27c. The sniper read it the second way, so a row priced above the vendor price showed up as a big profit. Each row now counts at its price per auction, only rows below vendor price (less your minimum) are deals, and each press buys one auction.
+- **The Buy button says exactly what one press buys:** "Buy 1 for 8s" or "Buy 10 for 23s 60c". The line above shows what a vendor pays and your profit; for trade goods, the dearest unit it includes. Hover it for the full detail: how many more of that auction are left, the most a trade-good purchase may cost before it's cancelled, and that nothing else in the list is bought.
+- **Fixed: market prices for gear and recipes on the Profits tab** were divided by the number of auctions in the cheapest row for the same reason.
+
 ## 0.4.0
 
 - **Vendor sniper.** A panel beside the auction house finds auctions you can buy for less than a vendor pays, and buys them **one press at a time without moving the mouse**: the Buy button stays put and each press buys the deal at the top of the list. Right-click it to skip a deal. Both are also key bindings (Key Bindings → AddOns → Auction House Profits).

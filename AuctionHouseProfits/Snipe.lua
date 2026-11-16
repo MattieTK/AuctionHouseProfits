@@ -326,9 +326,10 @@ function N:BuyNext()
             limit = M.SnipeLimit(b.qty, sell, minProfit, basis), stage = "price", time = clock() }
         C_AuctionHouse.StartCommoditiesPurchase(d.id, b.qty)
     else
+        -- One purchase buys one of the auctions grouped in the row.
         local a = d.buy.auctions[1]
-        self.purchase = { kind = "item", id = d.id, auctionID = a.auctionID, qty = a.qty, cost = a.buyout,
-            value = sell * a.qty, time = clock() }
+        self.purchase = { kind = "item", id = d.id, auctionID = a.auctionID, qty = 1, cost = a.buyout,
+            value = sell, time = clock() }
         C_AuctionHouse.PlaceBid(a.auctionID, a.buyout)
     end
     notify()
@@ -371,8 +372,13 @@ function N:Bought()
     s.spent, s.value = s.spent + (p.cost or p.quoted or 0), s.value + p.value
     local live = self.live[p.id]
     if p.kind == "item" and live and live.auctions then
+        -- The game re-sends the row (with a new auction ID) after a purchase.
         for i, a in ipairs(live.auctions) do
-            if a.auctionID == p.auctionID then table.remove(live.auctions, i); break end
+            if a.auctionID == p.auctionID then
+                a.qty = a.qty - 1
+                if a.qty <= 0 then table.remove(live.auctions, i) end
+                break
+            end
         end
     elseif live then
         live.stale = true -- re-read the book before buying more

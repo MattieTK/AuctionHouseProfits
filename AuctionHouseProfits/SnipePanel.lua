@@ -52,12 +52,18 @@ local function freeSlots()
     return free
 end
 
+local function itemName(d)
+    local hex = d.quality and ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[d.quality] and ITEM_QUALITY_COLORS[d.quality].hex
+    local name = d.name or ("item:" .. d.id)
+    return hex and (hex .. name .. "|r") or name
+end
+
 -- What one press buys from a checked deal: units, cost, profit.
 local function press(d)
     if not d or not d.verified or not d.buy then return nil end
     if d.kind == "item" then
         local a = d.buy.auctions[1]
-        return a.qty, a.buyout, a.profit
+        return 1, a.buyout, a.profit
     end
     return d.buy.qty, d.buy.cost, d.buy.profit
 end
@@ -169,12 +175,7 @@ function V:Build(ah)
     buy:SetScript("OnClick", function(_, mouse)
         if mouse == "RightButton" then V:Skip() else V:Buy() end
     end)
-    tip(buy, function(t)
-        t:AddLine("Buy the next deal")
-        t:AddLine("Each press buys the deal shown above: one auction, or every profitable unit of a trade good. "
-            .. "Trade goods are only bought if the server's price is still a deal. Right-click to skip it.", 1, 1, 1, true)
-        t:AddLine("Bind a key: Key Bindings > AddOns > Auction House Profits.", .6, .6, .6, true)
-    end)
+    tip(buy, function(t) V:BuyTooltip(t) end)
     self.buyButton = buy
     local skip = blizzButton(f, nil, "Skip", 66, 44)
     skip:SetPoint("LEFT", buy, "RIGHT", 6, 0)
@@ -217,7 +218,7 @@ function V:InitRow(row, d)
             t:AddLine(x.name or ("item:" .. x.id))
             t:AddLine(string.format("%s for %s, vendor pays %s", count(x.qty), U.Money(x.cost), U.Money(x.cost + x.profit)), 1, 1, 1)
             if x.verified then
-                if x.kind == "item" then t:AddLine(#x.buy.auctions .. " auctions, one per press.", 1, 1, 1) end
+                if x.kind == "item" then t:AddLine(count(x.qty) .. " auctions, one per press.", 1, 1, 1) end
                 t:AddLine("Checked against the live listings.", .3, .8, .3)
             else
                 t:AddLine("Estimate from the full scan; checking the live listings.", .6, .6, .6, true)
@@ -232,6 +233,42 @@ function V:InitRow(row, d)
     row.name:SetText(hex and (hex .. (d.name or ("item:" .. d.id)) .. "|r" .. color(MUTED, " x" .. count(d.qty))) or name)
     row.profit:SetText((d.verified and "" or color(MUTED, "~")) .. U.Money(d.profit, true, d.verified))
     row.sel:SetShown(d == N.deals[1])
+end
+
+-- Spell out what pressing Buy will do, and what it won't.
+function V:BuyTooltip(t)
+    local d = self.nextDeal
+    local qty, cost, gain = press(d)
+    if N:IsBusy() then
+        t:AddLine("Buying...")
+        t:AddLine("Waiting for the game to confirm the last purchase. Pressing again does nothing until then.", 1, 1, 1, true)
+        return
+    end
+    if not d then
+        t:AddLine("No deals")
+        t:AddLine("Nothing to buy. Scan the auction house first.", 1, 1, 1, true)
+        return
+    end
+    if not qty then
+        t:AddLine("Checking " .. itemName(d))
+        t:AddLine("The sniper is reading this item's live listings. Pressing now buys nothing; it checks them sooner.", 1, 1, 1, true)
+        return
+    end
+    t:AddLine("Buy " .. count(qty) .. " " .. itemName(d) .. " for " .. U.Money(cost))
+    t:AddLine("A vendor pays " .. U.Money(cost + gain) .. " for " .. (qty == 1 and "it" or "them") .. ": "
+        .. U.Money(gain, true, true) .. ".", 1, 1, 1, true)
+    if d.kind == "item" then
+        local left = d.buy.qty - 1
+        t:AddLine("One auction only." .. (left > 0 and (" " .. count(left) .. " more after this, one per press.") or ""), 1, 1, 1, true)
+    else
+        local minProfit, basis = N:Rules()
+        local sell = cost + gain
+        t:AddLine("The " .. count(qty) .. " cheapest, each " .. U.Money(d.buy.maxPrice) .. " or less. The game quotes the total before "
+            .. "you pay; if it's over " .. U.Money(M.SnipeLimit(qty, sell / qty, minProfit, basis))
+            .. " (someone bought the cheap ones first), the purchase is cancelled.", 1, 1, 1, true)
+    end
+    t:AddLine("Nothing else in the list is bought. Right-click to skip this deal.", .3, .8, .3, true)
+    t:AddLine("Bind a key: Key Bindings > AddOns > Auction House Profits.", .6, .6, .6, true)
 end
 
 ---------------------------------------------------------------------------
@@ -336,20 +373,21 @@ function V:Refresh()
     local n, profit, ready = N:Totals()
     self.totals:SetText(n > 0 and string.format("%d deals, %d checked · up to %s", n, ready, U.Money(profit, true, true)) or "")
 
-    -- Next deal and the Buy button
+    -- Next deal, and a Buy button that says exactly what one press buys.
     local d, why = N:Next()
     local qty, cost, gain = press(d)
+    self.nextDeal = d
     if d then
         self.nextIcon:SetTexture(d.icon)
         self.nextIcon:Show()
-        local hex = d.quality and ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[d.quality] and ITEM_QUALITY_COLORS[d.quality].hex
-        local name = d.name or ("item:" .. d.id)
-        self.nextName:SetText((qty or d.qty) .. " x " .. (hex and (hex .. name .. "|r") or name))
+        self.nextName:SetText(color(MUTED, "Next: ") .. itemName(d))
         if qty then
-            local more = d.kind == "item" and #d.buy.auctions > 1 and color(MUTED, " · 1 of " .. #d.buy.auctions) or ""
-            self.nextDetail:SetText("Pay " .. U.Money(cost) .. color(MUTED, ", vendor pays ") .. U.Money(cost + gain) .. more)
+            local each = d.kind == "item" and ("1 auction at " .. U.Money(cost))
+                or (count(qty) .. " at up to " .. U.Money(d.buy.maxPrice) .. " each")
+            self.nextDetail:SetText(each .. color(MUTED, " · vendor pays ") .. U.Money(cost + gain)
+                .. color(MUTED, " · ") .. U.Money(gain, true, true))
         else
-            self.nextDetail:SetText(color(MUTED, "About " .. U.Money(d.profit, true) .. ". " .. (why or "")))
+            self.nextDetail:SetText(color(MUTED, "About " .. U.Money(d.profit, true) .. " in all. Checking the live listings first."))
         end
     else
         self.nextIcon:Hide()
@@ -359,8 +397,8 @@ function V:Refresh()
     local text
     if N:IsBusy() then text = "Buying..."
     elseif not d then text = "No deals"
-    elseif not qty then text = "Checking..."
-    else text = "Buy  " .. U.Money(gain, true) end
+    elseif not qty then text = "Checking listings..."
+    else text = "Buy " .. count(qty) .. " for " .. U.Money(cost) end
     self.buyButton:SetText(text)
     self.buyButton:SetEnabled(P.ahOpen and d ~= nil and not N:IsBusy())
     self.skipButton:SetEnabled(d ~= nil and not N:IsBusy())
@@ -370,7 +408,7 @@ function V:Refresh()
         self.session:SetText(string.format("Since login: %d bought for %s, vendors pay %s", sess.units, U.Money(sess.spent),
             U.Money(sess.value)) .. color(MUTED, " (") .. U.Money(sess.value - sess.spent, true, true) .. color(MUTED, ")"))
     else
-        self.session:SetText(color(MUTED, "Right-click Buy to skip a deal."))
+        self.session:SetText(color(MUTED, "Each press buys only what the button says. Right-click to skip."))
     end
     local free = freeSlots()
     self.bags:SetText(free and (free == 0 and color(BAD, "Bags full: sell to a vendor first.") or (free .. " bag slots free")) or "")

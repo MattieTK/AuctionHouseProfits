@@ -326,6 +326,7 @@ test("vendor snipe: commodities take the cheap end, skip your own, stop at your 
         { price = 45, qty = 100, mine = 0 } }
     local b = M.CommodityBuy(levels, 50, 10, "unit")
     assert(b.qty == 7 and b.cost == 3 * 30 + 4 * 38 and b.profit == 7 * 50 - b.cost, "45c leaves 5c a unit")
+    assert(b.maxPrice == 38, "the dearest unit it includes")
     b = M.CommodityBuy(levels, 50, 10, "buy")
     assert(b.qty == 107 and b.profit == 107 * 50 - (90 + 152 + 4500), "every profitable unit when counting per purchase")
     b = M.CommodityBuy(levels, 50, 10, "unit", 150)
@@ -336,6 +337,7 @@ test("vendor snipe: commodities take the cheap end, skip your own, stop at your 
 end)
 
 test("vendor snipe: item auctions best first, never your own", function()
+    -- buyout is each auction's price; qty is how many identical auctions the row groups.
     local auctions = {
         { auctionID = 1, qty = 1, buyout = 80, mine = false },
         { auctionID = 2, qty = 1, buyout = 20, mine = false },
@@ -343,11 +345,26 @@ test("vendor snipe: item auctions best first, never your own", function()
         { auctionID = 4, qty = 2, buyout = 50, mine = false },
     }
     local b = M.ItemBuys(auctions, 100, 25, "unit")
-    assert(#b.auctions == 2 and b.auctions[1].auctionID == 4 and b.auctions[2].auctionID == 2, "most profit first")
-    assert(b.qty == 3 and b.cost == 70 and b.profit == 80 + 150)
+    assert(#b.auctions == 2 and b.auctions[1].auctionID == 2 and b.auctions[2].auctionID == 4, "most profit per press first")
+    assert(b.auctions[2].profit == 50, "profit is per purchase of one")
+    assert(b.qty == 3 and b.cost == 20 + 2 * 50 and b.profit == 80 + 2 * 50)
     b = M.ItemBuys(auctions, 100, 25, "unit", 40)
     assert(#b.auctions == 1 and b.auctions[1].auctionID == 2, "only what you can pay for")
     assert(M.ItemBuys(auctions, 100, 1000, "unit") == nil)
+end)
+
+test("vendor snipe: a row of 32 at 8s 27c is 32 auctions at 8s 27c, not 32 for 8s 27c", function()
+    -- Schematic: Catseye Ultra Goggles, vendor pays 8s 25c. Only the two at 8s are a deal.
+    local rows = {
+        { auctionID = 1, qty = 2, buyout = 800 }, { auctionID = 2, qty = 32, buyout = 827 },
+        { auctionID = 3, qty = 5, buyout = 828 }, { auctionID = 4, qty = 2, buyout = 829 },
+        { auctionID = 5, qty = 1, buyout = 1238 },
+    }
+    for _, basis in ipairs({ "unit", "buy" }) do
+        local b = M.ItemBuys(rows, 825, 20, basis)
+        assert(#b.auctions == 1 and b.auctions[1].auctionID == 1 and b.qty == 2, basis)
+        assert(b.cost == 1600 and b.profit == 50 and b.auctions[1].profit == 25, basis)
+    end
 end)
 
 test("vendor snipe: estimate from a full scan", function()
