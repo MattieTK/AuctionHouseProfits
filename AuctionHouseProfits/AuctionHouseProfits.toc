@@ -2,7 +2,7 @@
 ## Title: Auction House Profits
 ## Notes: Vendor-to-auction profit calculator with a Profits tab in the auction house, and a vendor sniper that buys auctions below vendor price one press at a time.
 ## Author: tk.gg
-## Version: 0.4.2
+## Version: 0.4.3
 ## X-Curse-Project-ID: 1801565
 ## SavedVariables: AuctionHouseProfitsDB, AuctionHouseProfitsData
 ## OptionalDeps: Auctionator, TradeSkillMaster, Auc-Advanced

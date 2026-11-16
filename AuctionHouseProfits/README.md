@@ -41,6 +41,7 @@ A panel beside the auction house finds auctions you can buy for less than a vend
 - **Full scan** reads every auction at once. The game allows one every 15 minutes per account, so in between the button becomes **Recheck**, which searches the items that had deals before. Searches you run on the Buy page are checked too.
 - Deals marked `~` are estimates from the full scan. The sniper checks each one against the live listings by itself, top of the list first.
 - **Buy** stays in the same place and says exactly what one press buys, such as **Buy 1 for 8s**: the deal at the top, and nothing else. Then the next one moves up. Hover it for what a vendor pays and the most a trade-good purchase may cost. Trade goods buy every profitable unit in one press, and are only confirmed if the server's price is still a deal. Gear buys one auction per press. **Right-click** Buy, or press **Skip**, to pass on a deal. Click a deal in the list to buy it next.
+- Hover the next deal (above the Buy button) for the item's own tooltip, with what other add-ons add to it, and the vendor price this add-on is using. Shift-click it to link the item.
 - For no mouse at all, bind keys under Key Bindings → AddOns → Auction House Profits.
 - `/ahp snipe` or the **Sniper** button on the Profits tab shows or hides it.
 

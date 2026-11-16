@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.3
+
+- **Hover the next deal in the sniper for the item's tooltip,** as if you'd hovered its link, so other add-ons' prices (vendor, market) show there too. Below it, the vendor price this add-on is using, each and for what one press buys. Shift-click it to link the item in chat.
+
 ## 0.4.2
 
 - **What the add-on has made you, kept for good.** Every sniper buy is recorded with what a vendor pays for it, and every auction sale of an item whose cost is known with its profit after the AH cut. Both are kept by day, across logouts and characters on the account.

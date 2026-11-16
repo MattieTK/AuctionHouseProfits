@@ -737,6 +737,16 @@ test("deals are checked against live listings before you press Buy", function()
     assert(lines[1]:find("^Buy 10 .*Runecloth.* for C2360$"), lines[1])
     assert(said:find("A vendor pays C4000") and said:find("10 cheapest, each C290 or less"), said)
     assert(said:find("over C3000") and said:find("cancelled") and said:find("Nothing else in the list is bought"), said)
+    -- Hovering the next deal shows the item's own tooltip, which other
+    -- add-ons add their prices to, and this add-on's vendor price.
+    local shown, extra = nil, {}
+    local setItem = GameTooltip.SetItemByID
+    GameTooltip.SetItemByID = function(_, id) shown = id end
+    GameTooltip.AddLine = function(_, text) extra[#extra + 1] = text end
+    SV.nextItem:GetScript("OnEnter")(SV.nextItem)
+    GameTooltip.AddLine, GameTooltip.SetItemByID = add, setItem
+    assert(shown == 14047, "the item tooltip")
+    assert(#extra == 1 and extra[1]:find("vendor pays C400 each, C4000 for these 10"), extra[1])
 end)
 
 test("one press buys every profitable unit of a trade good, confirmed at the server's price", function()

@@ -168,6 +168,19 @@ function V:Build(ah)
     detail:SetPoint("BOTTOMLEFT", icon, "BOTTOMRIGHT", 6, 1)
     detail:SetPoint("RIGHT", f, "RIGHT", -10, 0)
     self.nextDetail = detail
+    -- Hover the next deal for the game's item tooltip, with whatever other
+    -- add-ons add to it (their vendor and market prices). Shift-click links it.
+    local item = CreateFrame("Button", nil, f)
+    item:SetPoint("TOPLEFT", icon, "TOPLEFT")
+    item:SetPoint("BOTTOMRIGHT", detail, "BOTTOMRIGHT")
+    item:SetScript("OnEnter", function(self) V:ItemTooltip(self) end)
+    item:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+    item:SetScript("OnClick", function()
+        local d = V.nextDeal
+        local link = d and C_Item and C_Item.GetItemInfo and select(2, C_Item.GetItemInfo(d.id))
+        if link and HandleModifiedItemClick then HandleModifiedItemClick(link) end
+    end)
+    self.nextItem = item
 
     local buy = blizzButton(f, "AuctionHouseProfitsSnipeBuyButton", "Buy", WIDTH - 92, 44)
     buy:SetPoint("BOTTOMLEFT", 10, 50)
@@ -246,6 +259,24 @@ function V:InitRow(row, d)
 end
 
 -- Spell out what pressing Buy will do, and what it won't.
+-- The next deal's item tooltip, then what this add-on reads as its vendor price.
+function V:ItemTooltip(owner)
+    local d, t = self.nextDeal, GameTooltip
+    self.tooltipID = nil
+    if not d or not t then return end
+    t:SetOwner(owner, "ANCHOR_LEFT")
+    if t.SetItemByID then t:SetItemByID(d.id) else t:SetHyperlink("item:" .. d.id) end
+    local item = N.Item(d.id)
+    if item and item.sell then
+        local qty = press(d)
+        local line = "Auction House Profits: a vendor pays " .. U.Money(item.sell) .. " each"
+        if qty and qty > 1 then line = line .. ", " .. U.Money(item.sell * qty) .. " for these " .. count(qty) end
+        t:AddLine(line, 1, .82, 0, true)
+    end
+    t:Show()
+    self.tooltipID = d.id
+end
+
 function V:BuyTooltip(t)
     local d = self.nextDeal
     local qty, cost, gain = press(d)
@@ -387,6 +418,10 @@ function V:Refresh()
     local d, why = N:Next()
     local qty, cost, gain = press(d)
     self.nextDeal = d
+    -- Keep an open item tooltip on the deal it describes.
+    if GameTooltip and GameTooltip.IsOwned and GameTooltip:IsOwned(self.nextItem) and self.tooltipID ~= (d and d.id) then
+        if d then self:ItemTooltip(self.nextItem) else GameTooltip:Hide() end
+    end
     if d then
         self.nextIcon:SetTexture(d.icon)
         self.nextIcon:Show()

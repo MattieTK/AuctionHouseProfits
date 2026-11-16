@@ -1,7 +1,7 @@
 local ADDON, ns = ...
 local M, D, P, R, U, T = ns.Model, ns.Data, ns.Prices, ns.Merchant, ns.UI, ns.AuctionTab
 local S, B, N, SP = ns.Post, ns.AuctionsBar, ns.Snipe, ns.SnipePanel
-local VERSION = "0.4.2"
+local VERSION = "0.4.3"
 
 -- WoW Forever only (interface 16001). Other clients have different AH rules.
 local interface = select(4, GetBuildInfo())
