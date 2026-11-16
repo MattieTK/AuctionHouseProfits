@@ -76,11 +76,15 @@ end
 -- Deals: estimates from the last full scan, replaced by live listings
 ---------------------------------------------------------------------------
 -- deal = { id, kind ("commodity"/"item"/nil until checked), verified,
---          qty, cost, profit, buy (what one press buys), name, icon }
+--          qty, cost, profit, each, buy (what one press buys), name, icon }
+-- each is what the best single item makes. Deals rank by it, not by the
+-- total: you may not win every auction or unit, so the most valuable single
+-- purchases come first.
 local function better(a, b)
     if a.id == N.focus then return true end
     if b.id == N.focus then return false end
     if a.verified ~= b.verified then return a.verified end -- checked deals are ready to buy
+    if a.each ~= b.each then return a.each > b.each end
     if a.profit ~= b.profit then return a.profit > b.profit end
     return a.id < b.id
 end
@@ -107,11 +111,11 @@ function N:Compute(id)
             end
             if buy then
                 deal = { kind = live.kind, verified = not live.stale, qty = buy.qty, cost = buy.cost,
-                    profit = buy.profit, buy = buy, checked = live.time }
+                    profit = buy.profit, each = buy.best, buy = buy, checked = live.time }
             end
         elseif snap then
             local e = M.EstimateDeal(snap, sell, minProfit, basis)
-            if e then deal = { verified = false, qty = e.qty, cost = e.cost, profit = e.profit } end
+            if e then deal = { verified = false, qty = e.qty, cost = e.cost, profit = e.profit, each = e.best } end
         end
     end
     if old then

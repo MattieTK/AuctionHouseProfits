@@ -395,4 +395,16 @@ test("earnings ledger sums days by range", function()
     assert(M.LedgerProfit(nil) == 0)
 end)
 
+test("each deal knows what its best single item makes", function()
+    -- Commodity: the cheapest unit makes the most.
+    local c = M.CommodityBuy({ { price = 100, qty = 2 }, { price = 380, qty = 50 } }, 400, 1, "unit")
+    assert(c.qty == 52 and c.best == 300 and c.profit == 2 * 300 + 50 * 20)
+    -- Gear: the cheapest auction, however many dearer ones there are.
+    local g = M.ItemBuys({ { auctionID = 1, qty = 32, buyout = 823 }, { auctionID = 2, qty = 1, buyout = 800 } }, 825, 1, "unit")
+    assert(g.best == 25 and g.profit == 32 * 2 + 25)
+    -- Estimates: per unit, from (count, total buyout) pairs.
+    local e = M.EstimateDeal({ 32, 32 * 823, 1, 800 }, 825, 1, "unit")
+    assert(e.best == 25 and e.profit == 64 + 25)
+end)
+
 print(total .. " model tests passed")

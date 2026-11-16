@@ -956,6 +956,19 @@ test("the ledger starts from sales already on record, and survives a reload", fu
     assert(D:Load(now))
 end)
 
+test("deals rank by what one item makes, not by the total", function()
+    local saved, focus = SN.deals, SN.focus
+    SN.focus = nil
+    local stack = { id = 1, verified = true, qty = 32, profit = 64, each = 2 }   -- 32 auctions at +2c
+    local single = { id = 2, verified = true, qty = 1, profit = 50, each = 50 }  -- one at +50c
+    local estimate = { id = 3, verified = false, qty = 1, profit = 900, each = 900 }
+    SN.deals = { stack, estimate, single }
+    SN:Sort()
+    assert(SN.deals[1] == single and SN.deals[2] == stack and SN.deals[3] == estimate,
+        "the best single purchase first; estimates after checked deals until checked")
+    SN.deals, SN.focus = saved, focus
+end)
+
 test("settings changes redraw an open view", function()
     ns.UI:ToggleWindow(); settle()
     ns.UI:Select(2320); settle()

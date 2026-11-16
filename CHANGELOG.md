@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.4
+
+- **The sniper ranks deals by what one item makes,** not the total across every auction. You may not win them all, so the most valuable single purchase comes first: one auction at +50c now beats 32 at +2c each. Each row shows its best profit per item ("+25c each"); hover it for the total if you get them all. Checked deals still come before estimates, and each estimate moves up once it's checked.
+
 ## 0.4.3
 
 - **Hover the next deal in the sniper for the item's tooltip,** as if you'd hovered its link, so other add-ons' prices (vendor, market) show there too. Below it, the vendor price this add-on is using, each and for what one press buys. Shift-click it to link the item in chat.

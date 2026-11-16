@@ -240,6 +240,8 @@ function V:InitRow(row, d)
             local x = self.data
             t:AddLine(x.name or ("item:" .. x.id))
             t:AddLine(string.format("%s for %s, vendor pays %s", count(x.qty), U.Money(x.cost), U.Money(x.cost + x.profit)), 1, 1, 1)
+            t:AddLine("Up to " .. U.Money(x.each, true, true) .. " each, " .. U.Money(x.profit, true, true) .. " if you get all "
+                .. count(x.qty) .. ". Sorted by the most one item makes.", 1, 1, 1, true)
             if x.verified then
                 if x.kind == "item" then t:AddLine(count(x.qty) .. " auctions, one per press.", 1, 1, 1) end
                 t:AddLine("Checked against the live listings.", .3, .8, .3)
@@ -254,7 +256,7 @@ function V:InitRow(row, d)
     local hex = d.quality and ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[d.quality] and ITEM_QUALITY_COLORS[d.quality].hex
     local name = (d.name or ("item:" .. d.id)) .. color(MUTED, " x" .. count(d.qty))
     row.name:SetText(hex and (hex .. (d.name or ("item:" .. d.id)) .. "|r" .. color(MUTED, " x" .. count(d.qty))) or name)
-    row.profit:SetText((d.verified and "" or color(MUTED, "~")) .. U.Money(d.profit, true, d.verified))
+    row.profit:SetText((d.verified and "" or color(MUTED, "~")) .. U.Money(d.each, true, d.verified) .. color(MUTED, " each"))
     row.sel:SetShown(d == N.deals[1])
 end
 

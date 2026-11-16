@@ -584,20 +584,22 @@ end
 function M.CommodityBuy(levels, sell, minProfit, basis, money)
     if not M.Number(sell) or sell <= 0 or type(levels) ~= "table" then return nil end
     local unitNeed = basis == "unit" and max(1, M.Number(minProfit) and minProfit or 0) or 1
-    local qty, cost, top = 0, 0, nil
+    local qty, cost, top, first = 0, 0, nil, nil
     for _, l in ipairs(levels) do
         if not M.Number(l.price) or sell - l.price < unitNeed then break end
         local take = (l.qty or 0) - (l.mine or 0)
         if M.Number(money) and l.price > 0 then take = min(take, floor((money - cost) / l.price)) end
         if take > 0 then
             qty, cost, top = qty + take, cost + take * l.price, l.price
+            first = first or l.price
         end
         if M.Number(money) and money - cost < l.price then break end
     end
     if qty == 0 then return nil end
     local profit = M.VendorDeal(cost, qty, sell, minProfit, basis)
     if not profit then return nil end
-    return { qty = qty, cost = cost, profit = profit, maxPrice = top }
+    -- best: what the cheapest unit makes, the most any one item makes.
+    return { qty = qty, cost = cost, profit = profit, maxPrice = top, best = sell - first }
 end
 
 -- Which item (non-commodity) auctions to buy, best first. The AH groups
@@ -622,20 +624,23 @@ function M.ItemBuys(auctions, sell, minProfit, basis, money)
         if a.buyout ~= b.buyout then return a.buyout < b.buyout end
         return (a.auctionID or 0) < (b.auctionID or 0)
     end)
-    return { auctions = list, qty = qty, cost = cost, profit = profit }
+    return { auctions = list, qty = qty, cost = cost, profit = profit, best = list[1].profit }
 end
 
 -- An estimate from a full-scan snapshot. flat = { count1, buyout1, count2,
 -- buyout2, ... } for every auction of one item.
 function M.EstimateDeal(flat, sell, minProfit, basis)
     if type(flat) ~= "table" then return nil end
-    local qty, cost, profit = 0, 0, 0
+    local qty, cost, profit, best = 0, 0, 0, nil
     for i = 1, #flat - 1, 2 do
         local p = M.VendorDeal(flat[i + 1], flat[i], sell, minProfit, basis)
-        if p then qty, cost, profit = qty + flat[i], cost + flat[i + 1], profit + p end
+        if p then
+            qty, cost, profit = qty + flat[i], cost + flat[i + 1], profit + p
+            best = math.max(best or p / flat[i], p / flat[i])
+        end
     end
     if qty == 0 then return nil end
-    return { qty = qty, cost = cost, profit = profit }
+    return { qty = qty, cost = cost, profit = profit, best = best }
 end
 
 ---------------------------------------------------------------------------
