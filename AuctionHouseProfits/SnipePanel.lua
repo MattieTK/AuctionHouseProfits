@@ -58,9 +58,10 @@ local function itemName(d)
     return hex and (hex .. name .. "|r") or name
 end
 
--- What one press buys from a checked deal: units, cost, profit.
+-- What one press buys from a checked deal, or a trade good straight from
+-- the full scan: units, cost, profit.
 local function press(d)
-    if not d or not d.verified or not d.buy then return nil end
+    if not d or not (d.verified or d.direct) or not d.buy then return nil end
     if d.kind == "item" then
         local a = d.buy.auctions[1]
         return 1, a.buyout, a.profit
@@ -87,6 +88,23 @@ function V:Build(ah)
     local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", -2, -2)
     close:SetScript("OnClick", function() V:Toggle(false) end)
+    -- Sort by profit per item, or per bag slot (stackable items first).
+    local sort = blizzButton(f, nil, "Sort: per item", 104, 20)
+    sort:SetPoint("TOPRIGHT", -30, -7)
+    sort:SetScript("OnClick", function()
+        local set, serr = app:Set("snipeSort", app:Get("snipeSort") == "slot" and "item" or "slot")
+        if not set and serr then app.log:Warn(serr.message) end
+        V:Refresh()
+    end)
+    tip(sort, function(t)
+        local slot = app:Get("snipeSort") == "slot"
+        t:AddLine(slot and "Sorted by profit per bag slot" or "Sorted by profit per item")
+        t:AddLine(slot and "What one press makes for each bag slot it fills. 20 of a +5c trade good fill one slot (+1s); "
+            .. "gear takes a slot per item. Best when your bags fill up before your gold runs out."
+            or "What the best single item makes. You may not win every auction, so the most valuable ones come first.", 1, 1, 1, true)
+        t:AddLine("Click to sort by " .. (slot and "profit per item." or "profit per bag slot."), .6, .6, .6, true)
+    end)
+    self.sortButton = sort
 
     -- Minimum profit, in gold, silver and copper.
     local minLabel = label(f, "GameFontNormalSmall")
@@ -241,10 +259,14 @@ function V:InitRow(row, d)
             t:AddLine(x.name or ("item:" .. x.id))
             t:AddLine(string.format("%s for %s, vendor pays %s", count(x.qty), U.Money(x.cost), U.Money(x.cost + x.profit)), 1, 1, 1)
             t:AddLine("Up to " .. U.Money(x.each, true, true) .. " each, " .. U.Money(x.profit, true, true) .. " if you get all "
-                .. count(x.qty) .. ". Sorted by the most one item makes.", 1, 1, 1, true)
+                .. count(x.qty) .. ".", 1, 1, 1, true)
+            t:AddLine(U.Money(x.perSlot, true, true) .. " a bag slot" .. (x.stack > 1 and (" (stacks of " .. count(x.stack) .. ")")
+                or " (doesn't stack)") .. ".", 1, 1, 1, true)
             if x.verified then
                 if x.kind == "item" then t:AddLine(count(x.qty) .. " auctions, one per press.", 1, 1, 1) end
                 t:AddLine("Checked against the live listings.", .3, .8, .3)
+            elseif x.direct then
+                t:AddLine("From the full scan. One press buys it: the game quotes the price before you pay.", .3, .8, .3, true)
             else
                 t:AddLine("Estimate from the full scan; checking the live listings.", .6, .6, .6, true)
             end
@@ -256,7 +278,9 @@ function V:InitRow(row, d)
     local hex = d.quality and ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[d.quality] and ITEM_QUALITY_COLORS[d.quality].hex
     local name = (d.name or ("item:" .. d.id)) .. color(MUTED, " x" .. count(d.qty))
     row.name:SetText(hex and (hex .. (d.name or ("item:" .. d.id)) .. "|r" .. color(MUTED, " x" .. count(d.qty))) or name)
-    row.profit:SetText((d.verified and "" or color(MUTED, "~")) .. U.Money(d.each, true, d.verified) .. color(MUTED, " each"))
+    local slot = N.sortBy == "slot"
+    row.profit:SetText((d.verified and "" or color(MUTED, "~")) .. U.Money(slot and d.perSlot or d.each, true, d.verified)
+        .. color(MUTED, slot and " a slot" or " each"))
     row.sel:SetShown(d == N.deals[1])
 end
 
@@ -309,6 +333,10 @@ function V:BuyTooltip(t)
         t:AddLine("The " .. count(qty) .. " cheapest, each " .. U.Money(d.buy.maxPrice) .. " or less. The game quotes the total before "
             .. "you pay; if it's over " .. U.Money(M.SnipeLimit(qty, sell / qty, minProfit, basis))
             .. " (someone bought the cheap ones first), the purchase is cancelled.", 1, 1, 1, true)
+        if d.direct then
+            t:AddLine("Straight from the full scan, without searching first, so nobody gets there before you while we check. "
+                .. "The game's quote is the check.", .3, .8, .3, true)
+        end
     end
     t:AddLine("Nothing else in the list is bought. Right-click to skip this deal.", .3, .8, .3, true)
     t:AddLine("Bind a key: Key Bindings > AddOns > Auction House Profits.", .6, .6, .6, true)
@@ -345,7 +373,9 @@ function V:Start()
     self.scope = scope
     scope:Every(0.3, "pump", function() N:Pump() end)
     scope:Every(1, "clock", function() V:Refresh() end)
-    scope:Watch(self.app:SelectSettings(function(v) return tostring(v.snipeMinProfit) .. ":" .. tostring(v.snipeBasis) end),
+    scope:Watch(self.app:SelectSettings(function(v)
+        return tostring(v.snipeMinProfit) .. ":" .. tostring(v.snipeBasis) .. ":" .. tostring(v.snipeSort)
+    end),
         function() V:Refresh() end)
     self:Refresh()
 end
@@ -377,6 +407,7 @@ function V:Refresh()
     local app = self.app
     self.minimum:Set(app:Get("snipeMinProfit"))
     self.basis:SetText(app:Get("snipeBasis") == "unit" and "each" or "per buy")
+    self.sortButton:SetText(app:Get("snipeSort") == "slot" and "Sort: per slot" or "Sort: per item")
 
     -- Scan button and status
     local done, total = P:QueueProgress()
@@ -445,7 +476,7 @@ function V:Refresh()
     if N:IsBusy() then text = "Buying..."
     elseif not d then text = "No deals"
     elseif not qty then text = "Checking listings..."
-    else text = "Buy " .. count(qty) .. " for " .. U.Money(cost) end
+    else text = "Buy " .. count(qty) .. " for " .. (d.verified and "" or "~") .. U.Money(cost) end
     self.buyButton:SetText(text)
     self.buyButton:SetEnabled(P.ahOpen and d ~= nil and not N:IsBusy())
     self.skipButton:SetEnabled(d ~= nil and not N:IsBusy())

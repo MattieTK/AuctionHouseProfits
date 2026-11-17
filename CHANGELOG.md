@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.5
+
+Faster sniping, so fewer deals are gone before you can buy them.
+
+- **Trade goods are bought straight from the full scan,** with no search first. A commodity purchase is by item and quantity, and the game quotes the total before anything is paid, so the quote is the check: if the cheap units have gone, the purchase is cancelled as before. If that happens, the next press waits for a fresh look at the listings. The button shows `~` on the price while it's from the scan.
+- **Gear checks start while the scan is still being read,** best deal per item first, instead of after it. Gear still needs a search before buying, because the game buys it by auction ID and the full scan doesn't include them.
+- **The list appears as soon as the scan is read.** Items whose vendor price is still loading join as it arrives, instead of holding everything for up to 8 seconds.
+- **Each check starts the moment the last one answers,** not on the next timer tick. Pressing Buy on a deal still being checked moves it to the front.
+- **Sort by profit per bag slot.** The **Sort** button at the top of the sniper switches between profit per item and profit per bag slot: what one press makes for each slot it fills. 20 of a +5c trade good fill one slot (+1s a slot), while a +10c piece of gear fills a slot on its own, so stackable deals come first. Rows show "a slot" instead of "each", and hovering a row shows both, with the stack size. Also on the Options page.
+- **When a check finds a deal gone, the chat says so,** with the price the scan saw and what's there now, so you can tell a deal someone else bought from a misread price.
+
 ## 0.4.4
 
 - **The sniper ranks deals by what one item makes,** not the total across every auction. You may not win them all, so the most valuable single purchase comes first: one auction at +50c now beats 32 at +2c each. Each row shows its best profit per item ("+25c each"); hover it for the total if you get them all. Checked deals still come before estimates, and each estimate moves up once it's checked.

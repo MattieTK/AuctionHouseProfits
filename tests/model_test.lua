@@ -407,4 +407,18 @@ test("each deal knows what its best single item makes", function()
     assert(e.best == 25 and e.profit == 64 + 25)
 end)
 
+test("full-scan auctions as an order book, for buying trade goods straight from the scan", function()
+    local levels = M.FlatLevels({ 5, 2500, 10, 2000, 0, 50, 3, 300 })
+    assert(#levels == 3 and levels[1].price == 100 and levels[1].qty == 3 and levels[2].price == 200 and levels[3].price == 500)
+    local b = M.CommodityBuy(levels, 400, 100, "unit")
+    assert(b.qty == 13 and b.cost == 2300 and b.best == 300 and b.maxPrice == 200)
+end)
+
+test("profit per bag slot", function()
+    assert(M.PerSlot(100, 20, 5, 20) == 100, "20 at +5c fill one slot")
+    assert(M.PerSlot(105, 21, 5, 20) == 52.5, "21 need two slots")
+    assert(M.PerSlot(30, 3, 10, 1) == 10, "gear: one slot each, the best one's profit")
+    assert(M.PerSlot(30, 3, 10, nil) == 10 and M.PerSlot(0, 0, 0, 20) == 0)
+end)
+
 print(total .. " model tests passed")

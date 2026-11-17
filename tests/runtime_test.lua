@@ -634,7 +634,8 @@ end)
 -- Vendor sniper -----------------------------------------------------------------
 ITEMS[9999] = { "Rusty Sword", "|cffffffff|Hitem:9999::::::::60:::::|h[Rusty Sword]|h|r", 1, 10, 5, "Weapon", "Swords", 1, "", 135274, 300 }
 ITEMS[15000] = { "Quest Thing", "|cffffffff|Hitem:15000::::::::60:::::|h[Quest Thing]|h|r", 1, 1, 1, "Quest", "Quest", 1, "", 134400, 0 }
-cached[15000] = true -- 9999 loads after the scan has been read
+ITEMS[9998] = { "Old Shield", "|cffffffff|Hitem:9998::::::::60:::::|h[Old Shield]|h|r", 1, 10, 5, "Armor", "Shields", 1, "", 134955, 400 }
+cached[15000], cached[9998] = true, true -- 9999 loads after the scan has been read
 local replicate = {
     { id = 14047, count = 10, buyout = 2000 },               -- 2s a unit, vendor pays 4s: a deal
     { id = 14047, count = 5, buyout = 2500 },                -- 5s a unit: no
@@ -643,7 +644,12 @@ local replicate = {
     { id = 9999, count = 1, buyout = 250 },                  -- 50c: under the 1s minimum
     { id = 15000, count = 1, buyout = 1 },                   -- vendors won't buy it
     { id = 2320, count = 20, buyout = 20 },                  -- 1c a unit: under the minimum
+    { id = 9998, count = 1, buyout = 100 },                  -- vendor pays 4s: sold before we check it
 }
+-- Enough other auctions that reading takes more than one frame.
+for _ = 1, 600 do replicate[#replicate + 1] = { id = 2320, count = 20, buyout = 400 } end
+-- Trade goods are commodities; gear isn't.
+C_AuctionHouse.GetItemKeyInfo = function(key) return { isCommodity = key.itemID ~= 9999 and key.itemID ~= 9998 } end
 local purchases, bids, itemResults = {}, {}, {}
 C_AuctionHouse.ReplicateItems = function() replicate.asked = (replicate.asked or 0) + 1 end
 C_AuctionHouse.GetNumReplicateItems = function() return #replicate end
@@ -685,37 +691,46 @@ test("the sniper sits beside the auction house and shows when it opens", functio
     assert(xml:find("AUCTIONHOUSEPROFITS_SNIPE_BUY") and xml:find("AuctionHouseProfits_SnipeBuy%(%)"), "key binding declared")
 end)
 
-test("a full scan finds auctions below vendor price", function()
+test("a full scan lists deals as it's read, checking the best gear first", function()
+    local chat = #DEFAULT_CHAT_FRAME.lines
     SV.scanButton:GetScript("OnClick")(SV.scanButton); settle()
     assert(replicate.asked == 1 and SN.full and SV.scanButton:GetText() == "Scanning...")
-    W.event("REPLICATE_ITEM_LIST_UPDATE"); settle()
-    assert(SN.full and SN.full.stage == "prices" and SN.full.left == 1, "waits for the sword's vendor price")
-    assert(SV.status:GetText():find("Loading vendor prices"))
+    W.event("REPLICATE_ITEM_LIST_UPDATE")
+    -- The first 500 auctions are read; the shield is checked before the rest.
+    assert(SN.full and SN.full.stage == "reading" and SN.checking == 9998 and searches[#searches] == 9998,
+        "gear deals are checked while the scan is still being read")
+    itemResults[9998] = {} -- someone bought it
+    W.event("ITEM_SEARCH_RESULTS_UPDATED", { itemID = 9998 })
+    local said = DEFAULT_CHAT_FRAME.lines[chat + 1]
+    assert(said and said:find("Old Shield was gone when checked") and said:find("scan saw C100 each")
+        and said:find("none are listed now"), said)
+    settle()
+    assert(not SN.full and SN.snapshot.total == #replicate, "listed without waiting for vendor prices")
+    assert(not SN.byID[9998], "a check during the read outranks the scan")
+    local cloth = SN.byID[14047]
+    assert(cloth.direct and not cloth.verified and cloth.qty == 10 and cloth.cost == 2000 and cloth.profit == 2000)
+    assert(cloth.stack == 20 and cloth.perSlot == 2000, "10 Runecloth fill one slot")
+    assert(not SN.byID[9999], "the sword's vendor price hasn't loaded")
     cached[9999] = true
-    W.tick(1.1); settle()
-    assert(not SN.full and SN.snapshot.total == 7)
-    local deals = SN:Deals()
-    assert(#deals == 2, "two deals, got " .. #deals)
-    local cloth, sword = SN.byID[14047], SN.byID[9999]
-    assert(cloth.qty == 10 and cloth.cost == 2000 and cloth.profit == 2000 and not cloth.verified)
-    assert(sword.qty == 1 and sword.profit == 150, "one sword clears 1s")
+    W.event("GET_ITEM_INFO_RECEIVED", 9999, true); settle()
+    local sword = SN.byID[9999]
+    assert(sword and sword.qty == 1 and sword.profit == 150 and not sword.direct, "joins when its price loads")
     assert(not SN.byID[15000] and not SN.byID[2320], "unsellable and too-thin skipped")
+    assert(#SN:Deals() == 2)
     assert(SV.scanButton:GetText() == "Recheck" and SV.status:GetText():find("full scan in"), SV.status:GetText())
-    assert(#SV.listBox.rows == 2 and SV.listBox.rows[1].data.id == 14047, "most profit first")
-    assert(SV.listBox.rows[1].profit:GetText():find("~"), "estimates are marked")
+    assert(#SV.listBox.rows == 2 and SV.listBox.rows[1].data.id == 14047, "what one press can buy comes first")
+    assert(SV.listBox.rows[1].profit:GetText():find("~"), "scan prices are marked")
 end)
 
-test("deals are checked against live listings before you press Buy", function()
-    commodity[14047] = cheapBook
-    assert(SN.checking == 14047 and searches[#searches] == 14047, "the top deal is searched by itself")
-    assert(SV.buyButton:GetText() == "Checking listings...")
-    W.event("COMMODITY_SEARCH_RESULTS_UPDATED", 14047); settle()
-    local cloth = SN.byID[14047]
-    assert(cloth.verified and cloth.kind == "commodity" and cloth.buy.qty == 10 and cloth.buy.cost == 6 * 200 + 4 * 290,
-        "every unit making 1s or more")
-    assert(cloth.profit == 4000 - 2360)
-    -- Then the next one.
-    assert(SN.checking == 9999 and searches[#searches] == 9999)
+test("trade goods are bought straight from the scan; gear is checked first", function()
+    assert(SN.checking == 9999 and searches[#searches] == 9999, "gear is searched for its auction IDs")
+    local n14047 = 0
+    for _, id in ipairs(searches) do if id == 14047 then n14047 = n14047 + 1 end end
+    -- The press needs no search: the server quotes the price before we confirm.
+    assert(SV.buyButton:GetText() == "Buy 10 for ~C2000", "the button says what one press buys: " .. SV.buyButton:GetText())
+    assert(SV.nextName:GetText():find("Next:") and SV.nextName:GetText():find("Runecloth"))
+    local detail = SV.nextDetail:GetText()
+    assert(detail:find("10 at up to C200 each") and detail:find("vendor pays |rC4000") and detail:find("%+C2000"), detail)
     itemResults[9999] = {
         { auctionID = 71, quantity = 1, buyoutAmount = 150, containsOwnerItem = false },
         { auctionID = 72, quantity = 1, buyoutAmount = 120, containsOwnerItem = false },
@@ -724,19 +739,19 @@ test("deals are checked against live listings before you press Buy", function()
     W.event("ITEM_SEARCH_RESULTS_UPDATED", { itemID = 9999 }); settle()
     local sword = SN.byID[9999]
     assert(sword.verified and sword.kind == "item" and #sword.buy.auctions == 2 and sword.buy.auctions[1].auctionID == 72)
-    assert(SV.buyButton:GetText() == "Buy 10 for C2360", "the button says what one press buys: " .. SV.buyButton:GetText())
-    assert(SV.nextName:GetText():find("Next:") and SV.nextName:GetText():find("Runecloth"))
-    local detail = SV.nextDetail:GetText()
-    assert(detail:find("10 at up to C290 each") and detail:find("vendor pays |rC4000") and detail:find("%+C1640"), detail)
+    local m = 0
+    for _, id in ipairs(searches) do if id == 14047 then m = m + 1 end end
+    assert(m == n14047, "the trade good wasn't searched")
     local lines = {}
     local add = GameTooltip.AddLine
     GameTooltip.AddLine = function(_, text) lines[#lines + 1] = text end
     SV.buyButton:GetScript("OnEnter")(SV.buyButton)
     GameTooltip.AddLine = add
     local said = table.concat(lines, "\n")
-    assert(lines[1]:find("^Buy 10 .*Runecloth.* for C2360$"), lines[1])
-    assert(said:find("A vendor pays C4000") and said:find("10 cheapest, each C290 or less"), said)
-    assert(said:find("over C3000") and said:find("cancelled") and said:find("Nothing else in the list is bought"), said)
+    assert(lines[1]:find("^Buy 10 .*Runecloth.* for C2000$"), lines[1])
+    assert(said:find("A vendor pays C4000") and said:find("10 cheapest, each C200 or less"), said)
+    assert(said:find("over C3000") and said:find("cancelled") and said:find("Straight from the full scan"), said)
+    assert(said:find("Nothing else in the list is bought"), said)
     -- Hovering the next deal shows the item's own tooltip, which other
     -- add-ons add their prices to, and this add-on's vendor price.
     local shown, extra = nil, {}
@@ -750,6 +765,8 @@ test("deals are checked against live listings before you press Buy", function()
 end)
 
 test("one press buys every profitable unit of a trade good, confirmed at the server's price", function()
+    commodity[14047] = cheapBook -- what's really listed by now
+    local chat = #DEFAULT_CHAT_FRAME.lines
     press()
     assert(purchases[#purchases].start == 14047 and purchases[#purchases].qty == 10)
     assert(SN:IsBusy() and SV.buyButton:GetText() == "Buying..." and not SV.buyButton:IsEnabled())
@@ -761,10 +778,11 @@ test("one press buys every profitable unit of a trade good, confirmed at the ser
     W.event("COMMODITY_PURCHASE_SUCCEEDED"); settle()
     assert(not SN:IsBusy() and SN.session.units == 10 and SN.session.spent == 2360 and SN.session.value == 4000)
     assert(SV.session:GetText():find("10 bought"))
-    assert(not SN.byID[14047] or not SN.byID[14047].verified, "re-read before buying more")
+    assert(not SN.byID[14047] or not (SN.byID[14047].verified or SN.byID[14047].direct), "re-read before buying more")
     if SN.checking ~= 14047 then settle() end
     W.event("COMMODITY_SEARCH_RESULTS_UPDATED", 14047); settle()
     assert(not SN.byID[14047], "nothing left under vendor price")
+    assert(#DEFAULT_CHAT_FRAME.lines == chat, "not reported as gone: we bought it")
 end)
 
 test("one press buys one auction, the most profitable first", function()
@@ -839,6 +857,22 @@ test("a trade good whose price rose is cancelled, not bought", function()
     W.event("COMMODITY_PRICE_UPDATED", 301, 3010); settle()
     assert(purchases[before + 2].cancel and not purchases[before + 3], "over the limit: cancelled")
     assert(not SN:IsBusy())
+end)
+
+test("a scan price that's gone is cancelled, and the next press waits for a check", function()
+    SN.live[14047], SN.tried[14047] = nil, nil -- as if fresh from a full scan
+    SN:Evaluate(14047); settle()
+    assert(SN.byID[14047].direct and SV.buyButton:GetText() == "Buy 10 for ~C2000", SV.buyButton:GetText())
+    local before = #purchases
+    press()
+    W.event("COMMODITY_PRICE_UPDATED", 2100, 21000); settle() -- the cheap ones are long gone
+    assert(purchases[before + 1].start == 14047 and purchases[before + 2].cancel and not purchases[before + 3])
+    local d = SN.byID[14047]
+    assert(d and not d.direct and not d.verified and SV.buyButton:GetText() == "Checking listings...")
+    if SN.checking ~= 14047 then settle() end
+    assert(SN.checking == 14047, "checked straight away")
+    W.event("COMMODITY_SEARCH_RESULTS_UPDATED", 14047); settle()
+    assert(SN.byID[14047].verified)
 end)
 
 test("min profit in gold, silver and copper, per unit or per purchase", function()
@@ -967,6 +1001,28 @@ test("deals rank by what one item makes, not by the total", function()
     assert(SN.deals[1] == single and SN.deals[2] == stack and SN.deals[3] == estimate,
         "the best single purchase first; estimates after checked deals until checked")
     SN.deals, SN.focus = saved, focus
+end)
+
+test("sort by profit per bag slot puts stackable deals first", function()
+    local saved, focus = SN.deals, SN.focus
+    SN.focus = nil
+    -- 20 Runecloth at +5c fill one slot (+1s a slot); a +10c sword fills one slot each.
+    local cloth = { id = 1, verified = true, qty = 20, profit = 100, each = 5, stack = 20, perSlot = ns.Model.PerSlot(100, 20, 5, 20) }
+    local sword = { id = 2, verified = true, qty = 3, profit = 30, each = 10, stack = 1, perSlot = ns.Model.PerSlot(30, 3, 10, 1) }
+    assert(cloth.perSlot == 100 and sword.perSlot == 10)
+    SN.deals = { cloth, sword }
+    SN:Sort()
+    assert(SN.deals[1] == sword, "per item by default")
+    SV.sortButton:GetScript("OnClick")(SV.sortButton); settle()
+    assert(ns.App:Get("snipeSort") == "slot" and SV.sortButton:GetText() == "Sort: per slot")
+    assert(SN:Deals()[1] == cloth, "per bag slot: the stack first")
+    SV:Refresh()
+    assert(SV.listBox.rows[1].profit:GetText():find("C100") and SV.listBox.rows[1].profit:GetText():find("a slot"),
+        SV.listBox.rows[1].profit:GetText())
+    SV.sortButton:GetScript("OnClick")(SV.sortButton); settle()
+    assert(ns.App:Get("snipeSort") == "item" and SN:Deals()[1] == sword)
+    SN.deals, SN.focus = saved, focus
+    SN:Sort()
 end)
 
 test("settings changes redraw an open view", function()

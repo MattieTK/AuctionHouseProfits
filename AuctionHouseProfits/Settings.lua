@@ -42,6 +42,7 @@ function ns.ConfigureSettings(app)
             theme = { type = "enum", default = "forever", values = { "forever", "modern" }, label = "Theme" },
             snipeMinProfit = { type = "integer", default = 100, min = 0, max = 100000000, label = "Sniper minimum profit (copper)" },
             snipeBasis = { type = "enum", default = "unit", values = { "unit", "buy" }, label = "Minimum profit applies to" },
+            snipeSort = { type = "enum", default = "item", values = { "item", "slot" }, label = "Sort sniper deals by" },
             snipeShow = { type = "boolean", default = true, label = "Show the vendor sniper beside the auction house" },
         },
     })
@@ -146,6 +147,10 @@ function ns.ConfigureOptions(app, SND)
                     { type = "select", key = "snipeBasis", label = "Minimum profit applies to", choices = {
                         { value = "unit", label = "Each unit" },
                         { value = "buy", label = "Each purchase" },
+                    } },
+                    { type = "select", key = "snipeSort", label = "Sort deals by", choices = {
+                        { value = "item", label = "Profit per item" },
+                        { value = "slot", label = "Profit per bag slot (stackable items first)" },
                     } },
                 } },
             } },

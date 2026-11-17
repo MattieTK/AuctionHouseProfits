@@ -16,6 +16,8 @@ local ADDON, ns = ...
 local M, D, P, R = ns.Model, ns.Data, ns.Prices, ns.Merchant
 local N = {
     deals = {}, byID = {}, live = {}, items = {}, skipped = {}, listeners = {}, seq = 0,
+    kinds = {},  -- [itemID] = "commodity" / "item", once known
+    tried = {},  -- commodities bought (or tried) straight from the scan: check before the next
     session = { buys = 0, units = 0, spent = 0, value = 0 },
 }
 ns.Snipe = N
@@ -23,7 +25,6 @@ ns.Snipe = N
 local FULL_SCAN_COOLDOWN = 15 * 60
 local FULL_SCAN_WAIT = 30      -- seconds to wait for the game to send a full scan
 local READ_BATCH = 500         -- auctions read per frame; reading too fast can disconnect
-local INFO_TRIES = 8           -- seconds spent waiting for item prices to load
 local SEARCH_TIMEOUT = 6
 local PURCHASE_TIMEOUT = 10
 local RECHECK_LIMIT = 60
@@ -53,7 +54,8 @@ function N.Item(id)
     if not info and not (saved and num(saved.sellPrice) and saved.name) then return nil end
     local src = info or saved
     local sell = num(src.sellPrice)
-    known = { sell = sell and sell > 0 and sell or false, name = src.name, icon = src.icon, quality = src.quality }
+    known = { sell = sell and sell > 0 and sell or false, name = src.name, icon = src.icon, quality = src.quality,
+        maxStack = num(src.maxStack) }
     N.items[id] = known
     return known
 end
@@ -62,6 +64,21 @@ local function sellPrice(id)
     local item = N.Item(id)
     if not item then return nil end
     return item.sell
+end
+
+-- Commodity (bought by item and quantity) or item (bought by auction ID).
+-- nil while the game hasn't said.
+function N:KindOf(id)
+    local known = self.kinds[id]
+    if known then return known end
+    if C_AuctionHouse and C_AuctionHouse.GetItemKeyInfo and C_AuctionHouse.MakeItemKey then
+        local ok, info = pcall(C_AuctionHouse.GetItemKeyInfo, C_AuctionHouse.MakeItemKey(id))
+        if ok and type(info) == "table" and type(info.isCommodity) == "boolean" then
+            known = info.isCommodity and "commodity" or "item"
+            self.kinds[id] = known
+        end
+    end
+    return known
 end
 
 -- The random-suffix ID in an item link (item:id:enchant:gem1:gem2:gem3:gem4:suffix).
@@ -76,20 +93,29 @@ end
 -- Deals: estimates from the last full scan, replaced by live listings
 ---------------------------------------------------------------------------
 -- deal = { id, kind ("commodity"/"item"/nil until checked), verified,
---          qty, cost, profit, each, buy (what one press buys), name, icon }
+--          direct, scan, qty, cost, profit, each, buy (what one press buys),
+--          name, icon }
+-- each: what the best single item makes. perSlot: what one press makes per
+-- bag slot it fills (stackable items fill fewer).
+-- verified: from live listings. direct: a commodity from the full scan that
+-- one press can buy as it is, because the server quotes the price before
+-- we confirm. scan: the deal came from the full scan.
 -- each is what the best single item makes. Deals rank by it, not by the
 -- total: you may not win every auction or unit, so the most valuable single
 -- purchases come first.
 local function better(a, b)
     if a.id == N.focus then return true end
     if b.id == N.focus then return false end
-    if a.verified ~= b.verified then return a.verified end -- checked deals are ready to buy
+    local ra, rb = a.verified or a.direct or false, b.verified or b.direct or false
+    if ra ~= rb then return ra end -- deals one press can buy come first
+    if N.sortBy == "slot" and a.perSlot ~= b.perSlot then return a.perSlot > b.perSlot end
     if a.each ~= b.each then return a.each > b.each end
     if a.profit ~= b.profit then return a.profit > b.profit end
     return a.id < b.id
 end
 
 function N:Sort()
+    self.sortBy = self.app and self.app:Get("snipeSort") or "item"
     table.sort(self.deals, better)
 end
 
@@ -113,9 +139,17 @@ function N:Compute(id)
                 deal = { kind = live.kind, verified = not live.stale, qty = buy.qty, cost = buy.cost,
                     profit = buy.profit, each = buy.best, buy = buy, checked = live.time }
             end
+        elseif snap and self:KindOf(id) == "commodity" and not self.tried[id] then
+            -- No need to search first: StartCommoditiesPurchase is by item and
+            -- quantity, and we only confirm if the server's total is a deal.
+            local buy = M.CommodityBuy(M.FlatLevels(snap), sell, minProfit, basis, money())
+            if buy then
+                deal = { kind = "commodity", verified = false, direct = true, scan = true, qty = buy.qty,
+                    cost = buy.cost, profit = buy.profit, each = buy.best, buy = buy }
+            end
         elseif snap then
             local e = M.EstimateDeal(snap, sell, minProfit, basis)
-            if e then deal = { verified = false, qty = e.qty, cost = e.cost, profit = e.profit, each = e.best } end
+            if e then deal = { verified = false, scan = true, qty = e.qty, cost = e.cost, profit = e.profit, each = e.best } end
         end
     end
     if old then
@@ -125,6 +159,8 @@ function N:Compute(id)
     if deal then
         local item = N.Item(id) or {}
         deal.id, deal.name, deal.icon, deal.quality = id, item.name, item.icon, item.quality
+        deal.stack = item.maxStack or 1
+        deal.perSlot = M.PerSlot(deal.profit, deal.qty, deal.each, deal.stack)
         deal.suffixes = self.snapshot and self.snapshot.suffixes[id]
         self.deals[#self.deals + 1] = deal
         D:Watch(id, time())
@@ -163,6 +199,7 @@ end
 -- Deals, best first; rebuilt if the settings changed since.
 function N:Deals()
     if self.rulesKey ~= table.concat({ self:Rules() }, ":") then self:Rebuild() end
+    if self.app and self.sortBy ~= self.app:Get("snipeSort") then self:Sort() end
     return self.deals
 end
 
@@ -196,8 +233,10 @@ end
 ---------------------------------------------------------------------------
 -- Live listings (any search result, whoever asked)
 ---------------------------------------------------------------------------
+-- A search answered: check the next deal straight away, not on the timer.
 function N:Answered(id)
     if self.checking == id then self.checking = nil end
+    if self.after then self.after(0, "snipe-next-check", function() N:Pump() end) end
 end
 
 function N:OnCommodityResults(itemID)
@@ -217,10 +256,13 @@ function N:OnCommodityResults(itemID)
         end
     end
     -- Results arrive cheapest first: a partial answer still has the cheap end.
+    local expected = self:Expected(id)
+    self.kinds[id] = "commodity"
     self.seq = self.seq + 1
     self.live[id] = { kind = "commodity", levels = levels, time = time(), seq = self.seq }
     self:Answered(id)
     self:Evaluate(id)
+    self:ReportGone(id, expected, levels[1] and levels[1].price)
 end
 
 function N:OnItemResults(itemKey)
@@ -244,10 +286,43 @@ function N:OnItemResults(itemKey)
                 mine = r.containsOwnerItem == true }
         end
     end
+    local expected = self:Expected(id)
+    self.kinds[id] = "item"
     self.seq = self.seq + 1
     self.live[id] = { kind = "item", auctions = auctions, time = time(), seq = self.seq }
     self:Answered(id)
     self:Evaluate(id)
+    local cheapest
+    for _, a in ipairs(auctions) do
+        if not a.mine and (not cheapest or a.buyout < cheapest) then cheapest = a.buyout end
+    end
+    self:ReportGone(id, expected, cheapest)
+end
+
+-- The price per item the full scan saw for a deal not yet checked, or nil.
+function N:Expected(id)
+    local d, sell = self.byID[id], sellPrice(id)
+    if not sell then return nil end
+    if d and d.scan and d.each then return sell - d.each end
+    local f = self.full
+    local each = f and f.candidates and f.candidates[id]
+    return each and sell - each or nil
+end
+
+-- A deal from the scan that a check found gone: say so, with what's there
+-- now, so you can tell a sniped deal from a misread one.
+function N:ReportGone(id, expected, cheapest)
+    -- tried: we just bought (or tried to buy) it from the scan ourselves.
+    if not expected or self.byID[id] or self.tried[id] then return end
+    self.gone = (self.gone or 0) + 1
+    local item = N.Item(id)
+    local name = item and item.name or ("item " .. id)
+    local Money = ns.UI and ns.UI.Money or M.MoneyText
+    local now = cheapest and ("the cheapest is now " .. Money(cheapest) .. " each") or "none are listed now"
+    if DEFAULT_CHAT_FRAME then
+        DEFAULT_CHAT_FRAME:AddMessage("|cffe8bd55Auction House Profits:|r " .. name .. " was gone when checked. The scan saw "
+            .. Money(math.floor(expected + 0.5)) .. " each; " .. now .. ".")
+    end
 end
 
 function N:Search(id, key)
@@ -286,16 +361,40 @@ function N:Pump()
         end
         notify()
     end
-    if self.checking or self.purchase or self.full or P.queue then return end
+    if self.checking or self.purchase or P.queue then return end
+    if self.full and self.full.stage == "waiting" then return end
     if P.pending and now - P.pending.time < 3 then return end
-    local deals = self:Deals()
-    for _, d in ipairs(deals) do
-        if not d.verified then self:Search(d.id); return end
-    end
+    local id = self:NextCheck()
+    if id then self:Search(id); return end
+    if self.full then return end
     -- Gear is bought by auction ID, as Blizzard's Buy page does from the
     -- item's latest search; keep the top deal's search the latest one.
-    local head = deals[1]
+    local head = self:Deals()[1]
     if head and head.kind == "item" and self.lastSearch ~= head.id then self:Search(head.id) end
+end
+
+-- What to search next. A deal you pressed Buy on comes first. While a full
+-- scan is read, its best-looking gear starts being checked before the read
+-- ends. Commodities from the scan need no check (see Compute).
+function N:NextCheck()
+    local want = self.priority
+    self.priority = nil
+    if want and self.byID[want] and not self.byID[want].verified and not self.byID[want].direct then return want end
+    local f = self.full
+    if f then
+        local best, bestEach
+        for id, each in pairs(f.candidates or {}) do
+            if not f.checked[id] and not self.skipped[id] and self:KindOf(id) ~= "commodity"
+                and (not bestEach or each > bestEach or (each == bestEach and id < best)) then
+                best, bestEach = id, each
+            end
+        end
+        if best then f.checked[best] = true end
+        return best
+    end
+    for _, d in ipairs(self:Deals()) do
+        if not d.verified and not d.direct then return d.id end
+    end
 end
 
 ---------------------------------------------------------------------------
@@ -309,7 +408,7 @@ function N:Next()
     if self.purchase then return self.byID[self.purchase.id], "Waiting for the last purchase." end
     local d = self:Head()
     if not d then return nil, "No deals. Scan the auction house." end
-    if not d.verified then return d, "Checking the listings." end
+    if not d.verified and not d.direct then return d, "Checking the listings." end
     return d
 end
 
@@ -317,15 +416,21 @@ function N:BuyNext()
     if self.purchase and clock() - self.purchase.time > PURCHASE_TIMEOUT then self.purchase = nil end
     local d, why = self:Next()
     if not d or why then
-        if d and not d.verified and not self.checking then self:Search(d.id) end
+        -- Pressing on a deal still being checked moves it to the front.
+        if d and not d.verified and not d.direct then
+            self.priority = d.id
+            if not self.checking then self:Pump() end
+        end
         return false, why
     end
     d = self:Evaluate(d.id) -- your gold may have changed
-    if not d or not d.verified then return false, "No longer a deal." end
+    if not d or not (d.verified or d.direct) then return false, "No longer a deal." end
     local minProfit, basis = self:Rules()
     local sell = sellPrice(d.id)
     if d.kind == "commodity" then
         local b = d.buy
+        -- One go straight from the scan; after it, check the live listings.
+        if d.direct then self.tried[d.id] = true end
         self.purchase = { kind = "commodity", id = d.id, qty = b.qty, quoted = b.cost, value = sell * b.qty,
             limit = M.SnipeLimit(b.qty, sell, minProfit, basis), stage = "price", time = clock() }
         C_AuctionHouse.StartCommoditiesPurchase(d.id, b.qty)
@@ -363,7 +468,16 @@ end
 
 function N:OnThrottleReady()
     local p = self.purchase
-    if p and p.stage == "ready" then confirm(p) end
+    if p and p.stage == "ready" then confirm(p); return end
+    if self.after then self.after(0, "snipe-next-check", function() N:Pump() end) end
+end
+
+-- An item's name and vendor price loaded after the scan was read.
+function N:OnItemInfo(itemID)
+    local id = num(itemID)
+    if not id or N.items[id] or self.byID[id] then return end
+    if not ((self.snapshot and self.snapshot.items[id]) or self.live[id]) then return end
+    if N.Item(id) then self:Evaluate(id) end
 end
 
 -- A purchase went through.
@@ -449,7 +563,10 @@ function N:OnReplicate()
     local f = self.full
     if not f or f.stage ~= "waiting" then return end -- later events are item info arriving
     local total = num(C_AuctionHouse.GetNumReplicateItems()) or 0
-    self.full = { stage = "reading", total = total, index = 0, items = {}, suffixes = {}, asked = {}, started = f.started }
+    self.seq = self.seq + 1 -- the scan's place among live results: later ones win
+    self.skipped = {}
+    self.full = { stage = "reading", total = total, index = 0, items = {}, suffixes = {}, asked = {}, started = f.started,
+        seq = self.seq, candidates = {}, checked = {} }
     self:ReadBatch()
 end
 
@@ -459,6 +576,7 @@ function N:ReadBatch()
     if not P.ahOpen then self.full = nil; notify(); return end
     local last = math.min(f.total, f.index + READ_BATCH) - 1
     local get, link = C_AuctionHouse.GetReplicateItemInfo, C_AuctionHouse.GetReplicateItemLink
+    local minProfit, basis = self:Rules()
     for i = f.index, last do
         local _, _, count, _, _, _, _, _, _, buyout, _, _, _, owner, _, _, itemID = get(i)
         count, buyout, itemID = num(count), num(buyout), num(itemID)
@@ -474,6 +592,9 @@ function N:ReadBatch()
             flat[#flat + 1], flat[#flat + 2] = count, buyout
             -- Suffix variants need their own key to search; note any that look like deals.
             local sell = N.items[itemID] and N.items[itemID].sell
+            -- Worth checking before the read ends: profit per item.
+            local p = sell and M.VendorDeal(buyout, count, sell, minProfit, basis)
+            if p and p / count > (f.candidates[itemID] or -math.huge) then f.candidates[itemID] = p / count end
             if link and sell and buyout < sell * count then
                 local ok, l = pcall(link, i)
                 local s = ok and suffixOf(l)
@@ -489,40 +610,26 @@ function N:ReadBatch()
     end
     f.index = last + 1
     notify()
+    if not self.checking then self:Pump() end -- start on the best gear found so far
     if f.index >= f.total then
-        f.stage, f.tries = "prices", 0
-        self:WaitForPrices()
+        self:Publish()
     else
         self.after(0, "snipe-read", function() N:ReadBatch() end)
     end
 end
 
--- Items not in the client's cache load over a few seconds.
-function N:PricesLeft()
+-- The scan is read: list its deals now. Items whose vendor price hasn't
+-- loaded yet join as it arrives (OnItemInfo).
+function N:Publish()
     local f = self.full
-    local left = 0
-    if not f or not f.items then return 0 end
-    for id in pairs(f.items) do if not N.Item(id) then left = left + 1 end end
-    return left
-end
-
-function N:WaitForPrices()
-    local f = self.full
-    if not f or f.stage ~= "prices" then return end
-    f.left = self:PricesLeft()
-    f.tries = f.tries + 1
-    if f.left > 0 and f.tries < INFO_TRIES then
-        notify()
-        self.after(1, "snipe-prices", function() N:WaitForPrices() end)
-        return
-    end
-    self.seq = self.seq + 1
-    self.snapshot = { time = time(), seq = self.seq, total = f.total, items = f.items, suffixes = f.suffixes, unpriced = f.left }
+    self.snapshot = { time = time(), seq = f.seq, total = f.total, items = f.items, suffixes = f.suffixes }
     self.full = nil
-    self.skipped = {}
-    -- Live listings from before the scan are superseded by it.
-    for id, live in pairs(self.live) do if live.seq < self.snapshot.seq then self.live[id] = nil end end
+    -- Live listings from before the scan are superseded by it; ones checked
+    -- while it was read are newer and stay.
+    for id, live in pairs(self.live) do if live.seq < f.seq then self.live[id] = nil end end
+    self.tried = {}
     self:Rebuild()
+    self:Pump()
 end
 
 -- Search items that had deals before, to catch new ones between full scans.
@@ -541,7 +648,6 @@ function N:Status()
     if f and f.stage == "reading" then
         return string.format("Reading auctions %d / %d", f.index, f.total)
     end
-    if f and f.stage == "prices" then return string.format("Loading vendor prices (%d left)", f.left or 0) end
     return nil
 end
 
@@ -568,6 +674,14 @@ function N:Attach(app, scope)
     on("AUCTION_HOUSE_PURCHASE_COMPLETED", function(auctionID) N:OnItemPurchased(auctionID) end)
     on("AUCTION_HOUSE_SHOW_ERROR", function() if N.purchase then N:Failed() end end)
     on("AUCTION_HOUSE_THROTTLED_SYSTEM_READY", function() N:OnThrottleReady() end)
+    on("GET_ITEM_INFO_RECEIVED", function(id, ok) if ok then N:OnItemInfo(id) end end)
+    -- Whether an item is a commodity can load late too; one may now be buyable
+    -- straight from the scan.
+    on("ITEM_KEY_ITEM_INFO_RECEIVED", function(itemID)
+        local id = num(itemID)
+        local d = id and N.byID[id]
+        if d and d.scan and not d.direct and not N.kinds[id] and N:KindOf(id) == "commodity" then N:Evaluate(id) end
+    end)
     on("AUCTION_HOUSE_CLOSED", function()
         N.purchase, N.full, N.checking = nil, nil, nil
         -- Commodity books move while you're away; check again on return.

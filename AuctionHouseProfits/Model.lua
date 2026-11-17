@@ -627,6 +627,28 @@ function M.ItemBuys(auctions, sell, minProfit, basis, money)
     return { auctions = list, qty = qty, cost = cost, profit = profit, best = list[1].profit }
 end
 
+-- Profit per bag slot for what one press buys: qty units making profit in
+-- all, stacking stack to a slot. Unstackable items take a slot each, so it's
+-- the profit of the best one (each).
+function M.PerSlot(profit, qty, each, stack)
+    stack = M.Number(stack) and stack >= 1 and floor(stack) or 1
+    if stack == 1 or not M.Number(qty) or qty <= 0 then return each end
+    return profit / math.ceil(qty / stack)
+end
+
+-- A full-scan snapshot's auctions of one commodity as an order book, cheapest
+-- first, for M.CommodityBuy. flat = { count1, buyout1, ... }, buyout per auction.
+function M.FlatLevels(flat)
+    local levels = {}
+    if type(flat) ~= "table" then return levels end
+    for i = 1, #flat - 1, 2 do
+        local n, total = flat[i], flat[i + 1]
+        if M.Number(n) and n > 0 and M.Number(total) then levels[#levels + 1] = { price = total / n, qty = n } end
+    end
+    table.sort(levels, function(a, b) return a.price < b.price end)
+    return levels
+end
+
 -- An estimate from a full-scan snapshot. flat = { count1, buyout1, count2,
 -- buyout2, ... } for every auction of one item.
 function M.EstimateDeal(flat, sell, minProfit, basis)
