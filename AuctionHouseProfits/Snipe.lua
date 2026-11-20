@@ -53,8 +53,8 @@ function N.Item(id)
     local saved = not info and D:Item(id)
     if not info and not (saved and num(saved.sellPrice) and saved.name) then return nil end
     local src = info or saved
-    local sell = num(src.sellPrice)
-    known = { sell = sell and sell > 0 and sell or false, name = src.name, icon = src.icon, quality = src.quality,
+    local sell = M.VendorPays(id, num(src.sellPrice))
+    known = { sell = sell > 0 and sell or false, name = src.name, icon = src.icon, quality = src.quality,
         maxStack = num(src.maxStack) }
     N.items[id] = known
     return known
@@ -636,7 +636,8 @@ end
 function N:Recheck()
     local ids = {}
     for _, id in ipairs(D:Watched(RECHECK_LIMIT)) do
-        if not self.skipped[id] then ids[#ids + 1] = id end
+        -- Watched before it was known vendors refuse it: don't search it again.
+        if not self.skipped[id] and not M.VENDOR_REFUSES[id] then ids[#ids + 1] = id end
     end
     if #ids == 0 then return false, "Nothing to recheck yet. Run a full scan first." end
     return P:StartQueue(ids)

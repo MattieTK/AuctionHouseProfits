@@ -35,6 +35,21 @@ function M.Number(v)
     return type(v) == "number" and v == v and v ~= huge and v ~= -huge
 end
 
+-- Items the game reports a sell price for that vendors won't buy ("The
+-- merchant doesn't want that item"). Everything that counts on selling to a
+-- vendor treats them as worth nothing there: the sniper never lists them, and
+-- unsold stacks of them aren't counted as vendored. Add each one with where
+-- the report came from.
+M.VENDOR_REFUSES = {
+    [6947] = true, -- Instant Poison (Rank 1): Blizzard bug report, 2026-11-13
+}
+
+-- What a vendor pays for one, from the sell price the game reports.
+function M.VendorPays(id, sellPrice)
+    if M.VENDOR_REFUSES[id] or not M.Number(sellPrice) or sellPrice <= 0 then return 0 end
+    return sellPrice
+end
+
 local function clamp(v, lo, hi) return max(lo, min(hi, v)) end
 
 ---------------------------------------------------------------------------

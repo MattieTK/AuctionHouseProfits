@@ -309,6 +309,13 @@ test("sale profit and quotes", function()
     near(q.profitUnit, q.profit / 20, 1e-9)
 end)
 
+test("vendor pays nothing for items it refuses, whatever their sell price", function()
+    assert(M.VendorPays(14047, 400) == 400)
+    assert(M.VendorPays(14047, 0) == 0 and M.VendorPays(14047, nil) == 0)
+    assert(M.VENDOR_REFUSES[6947], "Instant Poison (Rank 1)")
+    assert(M.VendorPays(6947, 25) == 0, "shows a sell price, vendors refuse it")
+end)
+
 test("vendor snipe: per unit or per purchase", function()
     -- A vendor pays 50c each; you want 10c.
     assert(M.VendorDeal(40, 1, 50, 10, "unit") == 10)

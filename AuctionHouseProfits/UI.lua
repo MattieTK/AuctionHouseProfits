@@ -1081,7 +1081,7 @@ function U:RefreshDetail()
 
     -- Stats
     local s = self.stats
-    local buysAt = info.sellPrice > 0 and ("buys back at " .. Money(info.sellPrice)) or "can't sell to vendors"
+    local buysAt = info.vendorPays > 0 and ("buys back at " .. Money(info.vendorPays)) or "can't sell to vendors"
     if a.baseUnit then
         s.vendor.value:SetText(Money(a.baseUnit) .. (a.vendor.qty > 1 and color(MUTED, " /" .. a.vendor.qty) or ""))
         s.vendor.sub:SetText(buysAt)

@@ -27,6 +27,8 @@ function A.Info(id)
     info.name = info.name or ("item:" .. id)
     info.maxStack = M.Number(info.maxStack) and info.maxStack > 0 and info.maxStack or 1
     info.sellPrice = M.Number(info.sellPrice) and info.sellPrice or 0
+    -- sellPrice still sets the AH deposit; vendorPays is what selling to one gets.
+    info.vendorPays = M.VendorPays(id, info.sellPrice)
     return info
 end
 
@@ -174,7 +176,7 @@ function A.Item(app, id, now)
     end
 
     local function planFor(unitCost)
-        return { stackSize = out.stackSize, stacks = out.stacks, unitCost = unitCost, vendorSellUnit = info.sellPrice,
+        return { stackSize = out.stackSize, stacks = out.stacks, unitCost = unitCost, vendorSellUnit = info.vendorPays,
             unsold = app:Get("unsold"), odds = out.odds, deposit = deposit, rules = rules }
     end
     out.plan = planFor(out.unitCost)

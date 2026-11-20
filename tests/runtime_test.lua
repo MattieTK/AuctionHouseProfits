@@ -635,7 +635,9 @@ end)
 ITEMS[9999] = { "Rusty Sword", "|cffffffff|Hitem:9999::::::::60:::::|h[Rusty Sword]|h|r", 1, 10, 5, "Weapon", "Swords", 1, "", 135274, 300 }
 ITEMS[15000] = { "Quest Thing", "|cffffffff|Hitem:15000::::::::60:::::|h[Quest Thing]|h|r", 1, 1, 1, "Quest", "Quest", 1, "", 134400, 0 }
 ITEMS[9998] = { "Old Shield", "|cffffffff|Hitem:9998::::::::60:::::|h[Old Shield]|h|r", 1, 10, 5, "Armor", "Shields", 1, "", 134955, 400 }
-cached[15000], cached[9998] = true, true -- 9999 loads after the scan has been read
+-- Reports a sell price, but vendors refuse it.
+ITEMS[6947] = { "Instant Poison", "|cffffffff|Hitem:6947::::::::60:::::|h[Instant Poison]|h|r", 1, 20, 20, "Consumable", "Consumable", 20, "", 132273, 500 }
+cached[15000], cached[9998], cached[6947] = true, true, true -- 9999 loads after the scan has been read
 local replicate = {
     { id = 14047, count = 10, buyout = 2000 },               -- 2s a unit, vendor pays 4s: a deal
     { id = 14047, count = 5, buyout = 2500 },                -- 5s a unit: no
@@ -643,6 +645,7 @@ local replicate = {
     { id = 9999, count = 1, buyout = 150 },                  -- vendor pays 3s: a deal
     { id = 9999, count = 1, buyout = 250 },                  -- 50c: under the 1s minimum
     { id = 15000, count = 1, buyout = 1 },                   -- vendors won't buy it
+    { id = 6947, count = 20, buyout = 20 },                  -- shows 5s each, but vendors refuse it
     { id = 2320, count = 20, buyout = 20 },                  -- 1c a unit: under the minimum
     { id = 9998, count = 1, buyout = 100 },                  -- vendor pays 4s: sold before we check it
 }
@@ -716,6 +719,7 @@ test("a full scan lists deals as it's read, checking the best gear first", funct
     local sword = SN.byID[9999]
     assert(sword and sword.qty == 1 and sword.profit == 150 and not sword.direct, "joins when its price loads")
     assert(not SN.byID[15000] and not SN.byID[2320], "unsellable and too-thin skipped")
+    assert(not SN.byID[6947] and SN.Item(6947).sell == false, "a sell price vendors refuse isn't a deal")
     assert(#SN:Deals() == 2)
     assert(SV.scanButton:GetText() == "Recheck" and SV.status:GetText():find("full scan in"), SV.status:GetText())
     assert(#SV.listBox.rows == 2 and SV.listBox.rows[1].data.id == 14047, "what one press can buy comes first")
@@ -906,7 +910,9 @@ test("between full scans, Recheck searches items that had deals", function()
     local ok, why = SN:FullScan()
     assert(not ok and why:find("next full scan"), "the game allows one every 15 minutes")
     local before = #searches
+    AuctionHouseProfitsData.watch[6947] = time() + 1 -- watched by an older version
     SV.scanButton:GetScript("OnClick")(SV.scanButton); settle()
+    for _, id in ipairs(ns.Prices.queue.ids) do assert(id ~= 6947, "items vendors refuse aren't rechecked") end
     assert(ns.Prices:QueueProgress(), "rechecking")
     assert(SV.scanButton:GetText():find("^Stop"))
     SV.scanButton:GetScript("OnClick")(SV.scanButton); settle()

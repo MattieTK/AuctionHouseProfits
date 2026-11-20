@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.6
+
+- **Items vendors refuse are left out, whatever sell price they show.** Some items show a vendor price on their tooltip, but every vendor answers "The merchant doesn't want that item." The sniper no longer lists them as deals or rechecks them, and on the Profits tab unsold stacks of them aren't counted as sold to a vendor. The first is Instant Poison (Rank 1). More get added as they're reported.
+
 ## 0.4.5
 
 Faster sniping, so fewer deals are gone before you can buy them.
