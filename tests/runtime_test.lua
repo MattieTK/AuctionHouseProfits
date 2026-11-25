@@ -454,6 +454,46 @@ test("selecting an item auto-scans the AH and uses the game deposit", function()
     assert(ns.Data:Plan(14047).price == nil and boxes[3]:GetText() == "99")
 end)
 
+test("Scan AH re-analyses only the item scanned, not the whole list", function()
+    local U, A = ns.UI, ns.Analysis
+    U:SetFilter("all"); settle()
+    local rows = #U.rows
+    assert(rows >= 3, "a list to not re-analyse: " .. rows)
+    local item, seen = A.Item, {}
+    A.Item = function(app, id, now) seen[#seen + 1] = id; return item(app, id, now) end
+    U.scanButton:GetScript("OnClick")(U.scanButton); settle()
+    commodity[14047][1].unitPrice = 2050
+    W.event("COMMODITY_SEARCH_RESULTS_UPDATED", 14047); settle()
+    W.event("COMMODITY_SEARCH_RESULTS_ADDED", 14047); settle()
+    A.Item = item
+    commodity[14047][1].unitPrice = 2100
+    assert(#seen > 0, "the scanned item is redrawn")
+    for _, id in ipairs(seen) do assert(id == 14047, "re-analysed item " .. tostring(id)) end
+    local row
+    for _, r in ipairs(U.rows) do if r.id == 14047 then row = r end end
+    assert(row and row.market == 2049 and #U.rows == rows, "its row shows the new price")
+    seen = {}
+    A.Item = function(app, id, now) seen[#seen + 1] = id; return item(app, id, now) end
+    U:Select(2320); settle()
+    A.Item = item
+    assert(#seen > 0, "the selected item is drawn")
+    for _, id in ipairs(seen) do assert(id == 2320, "selecting an item re-analysed item " .. tostring(id)) end
+    U:Select(14047); settle()
+    local distinct = {}
+    A.Item = function(app, id, now) distinct[id] = true; return item(app, id, now) end
+    U:SetFilter("vendor"); settle()
+    A.Item = item
+    local n = 0
+    for _ in pairs(distinct) do n = n + 1 end
+    assert(n == #U.rows and n > 1, "changing the filter rebuilds the whole list")
+    seen = {}
+    A.Item = function(app, id, now) seen[#seen + 1] = id; return item(app, id, now) end
+    W.event("BAG_UPDATE_DELAYED"); settle() -- e.g. after a buy
+    A.Item = item
+    assert(#seen > 0, "the selected item's bag count is redrawn")
+    for _, id in ipairs(seen) do assert(id == 14047, "a bag change re-analysed item " .. tostring(id)) end
+end)
+
 test("a search that finds nothing clears stale sellers", function()
     commodity[3371] = {}
     ns.Data:RecordScan(3371, 30, 5, os.time(), { { price = 30, qty = 5, mine = 0 } })

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.8
+
+- **Fixed: Scan AH froze the game for a moment.** Each search result re-analysed every item in the list on the left, including their prices from other add-ons and their deposits, two or more times per scan. Now a search redraws only the item searched. Clicking an item in the list and buying (which changes your bags) no longer re-analyse the whole list either, so scanning and buying feel as quick as Blizzard's own refresh. Changing the filter, search, sort or settings still redraws everything.
+
 ## 0.4.7
 
 - **Buy under your price, in one press.** On a trade good's page in the Profits tab, set the most you'll pay each in the boxes at the top right. The **Buy** button beside **Scan AH** then says what one press gets ("Buy 37 for 1g 11s"): every unit listed at your price or less that you can afford, cheapest first, with no quantity to pick and no confirm step. Scan, buy, scan again, with the two buttons side by side. The game quotes the total before anything is paid. If cheaper units have gone and it comes to more than your price for all of them, the purchase is cancelled. The listings are searched again after each buy. Your price lasts until you log out or reload. Trade goods only: gear is bought one auction at a time.

@@ -974,7 +974,7 @@ end
 function U:Select(id)
     self.selected = id
     self:RefreshDetail()
-    self:RequestList()
+    self:DrawRows() -- moves the highlight; nothing in the list changed
     if id and P.ahOpen and self.app:Get("autoScan") then
         local scan = D:Scan(id)
         local stale = not scan or (time() - scan.time) > self.app:Get("scanFreshMinutes") * 60
@@ -1090,14 +1090,55 @@ end
 ---------------------------------------------------------------------------
 function U:RequestList() if self.onListRequested then self.onListRequested() else self:RefreshList() end end
 
+-- What changed since the list was drawn. A search result for one item
+-- re-analyses that row only: re-analysing every item in the list (their
+-- prices from other add-ons, deposits, history) on each result froze the
+-- game. Anything else redraws the whole list. id nil = everything.
+function U:Invalidate(id)
+    if id == nil then
+        self.listAll, self.listChanged = true, nil
+    elseif not self.listAll then
+        self.listChanged = self.listChanged or {}
+        self.listChanged[id] = true
+    end
+end
+
+-- Re-analyse just the changed rows. false when one may have to join the list.
+function U:UpdateRows(changed)
+    local at = {}
+    for i, r in ipairs(self.rows) do at[r.id] = i end
+    local now = time()
+    for id in pairs(changed) do
+        if at[id] then
+            self.rows[at[id]] = A.Summary(self.app, id, now)
+        elseif self.filter == "all" then
+            return false -- "all" lists scanned items: this one may be new
+        end
+    end
+    return true
+end
+
+function U:DrawRows()
+    if self.listBox and CreateDataProvider and self.rows then
+        self.listBox:SetDataProvider(CreateDataProvider(self.rows), ScrollBoxConstants and ScrollBoxConstants.RetainScrollPosition)
+    end
+end
+
 function U:RefreshList()
     if not self.panel or not self.panel:IsShown() then return end
     local sort = self.app:Get("listSort")
-    local rows = A.List(self.app, self.filter, self.query, ns.lastMerchant and ns.lastMerchant.npc, time(), sort)
-    self.rows = rows
-    if self.listBox and CreateDataProvider then
-        self.listBox:SetDataProvider(CreateDataProvider(rows), ScrollBoxConstants and ScrollBoxConstants.RetainScrollPosition)
+    local merchant = ns.lastMerchant and ns.lastMerchant.npc
+    local key = table.concat({ self.filter or "", self.query or "", merchant or "", sort or "" }, "\0")
+    local changed = not self.listAll and self.listChanged
+    self.listAll, self.listChanged = nil, nil
+    local rows = self.rows
+    if changed and rows and self.listKey == key and self:UpdateRows(changed) then
+        table.sort(rows, A.Sorter(sort))
+    else
+        rows = A.List(self.app, self.filter, self.query, merchant, time(), sort)
+        self.rows, self.listKey = rows, key
     end
+    self:DrawRows()
     local where = ({ vendor = "vendor items", merchant = "from the last merchant", bags = "in your bags", all = "known items" })[self.filter]
     self.count:SetText(#rows .. " " .. (where or "items") .. " · profit/unit")
     local done, total = P:QueueProgress()

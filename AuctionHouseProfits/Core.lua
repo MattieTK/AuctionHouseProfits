@@ -1,7 +1,7 @@
 local ADDON, ns = ...
 local M, D, P, R, U, T = ns.Model, ns.Data, ns.Prices, ns.Merchant, ns.UI, ns.AuctionTab
 local S, B, N, SP = ns.Post, ns.AuctionsBar, ns.Snipe, ns.SnipePanel
-local VERSION = "0.4.7"
+local VERSION = "0.4.8"
 
 -- WoW Forever only (interface 16001). Other clients have different AH rules.
 local interface = select(4, GetBuildInfo())
@@ -26,12 +26,15 @@ end
 -- Small UI projection: views redraw when this revision changes.
 local view
 local state = app:State({ revision = 0 })
-local function publish()
+-- id: only that item changed (its search results came in), so the list
+-- re-analyses one row instead of every item in it.
+local function publish(id)
+    U:Invalidate(id)
     -- The Auctions-tab strip isn't a state watcher; refresh it directly.
     if B.bar and B.bar:IsShown() then core:After(0, "auctions-bar", function() B:Refresh() end) end
     local ok, err = state:Update(function(draft) draft.revision = draft.revision + 1 end)
     if not ok and err.code == "reentrant" then
-        core:After(0, "publish", publish)
+        core:After(0, "publish", function() publish() end)
     elseif not ok then
         app.log:Warn(err.message)
     end
@@ -50,8 +53,9 @@ end
 U.onShown = function()
     if view then view:Cancel() end
     view = app:Scope()
+    U:Invalidate() -- anything may have changed while it was hidden
     view:Watch(state:Select(function(s) return s.revision end), function() U:Refresh() end)
-    view:Watch(app:SelectSettings(function(values) return values end), function() U:Refresh() end)
+    view:Watch(app:SelectSettings(function(values) return values end), function() U:Invalidate(); U:Refresh() end)
 end
 U.onHidden = function()
     if view then view:Cancel(); view = nil end
@@ -76,7 +80,7 @@ local function onItemInfo(itemID, success)
     if not success then ns.Analysis.failed[itemID] = true end
     if ns.Analysis.requested[itemID] then
         ns.Analysis.requested[itemID] = nil
-        if U:IsShown() then (view or core):After(0.2, "item-info", publish) end
+        if U:IsShown() then (view or core):After(0.2, "item-info", function() publish() end) end
     end
 end
 
@@ -99,7 +103,7 @@ app:OnReady(function()
     D:Load(time())
     P:Attach(core)
     P.after = function(delay, key, fn) core:After(delay, key, fn) end
-    P:OnChange(function() publish() end)
+    P:OnChange(function(id) publish(id) end)
     N.after = function(delay, key, fn) core:After(delay, key, fn) end
     N:Attach(app, core)
     N:OnChange(function() SP:RequestRefresh(); U:RefreshBuy() end)
@@ -113,7 +117,11 @@ app:OnReady(function()
     required(core:Event("MERCHANT_SHOW", onMerchantShow))
     required(core:Event("GET_ITEM_INFO_RECEIVED", onItemInfo))
     required(core:Event("BAG_UPDATE_DELAYED", function()
-        if U:IsShown() or (B.bar and B.bar:IsShown()) then publish() end
+        if not (U:IsShown() or (B.bar and B.bar:IsShown())) then return end
+        -- Bags decide which items the Bags and All lists show; the vendor
+        -- lists only need the selected item's bag count redrawn.
+        local only = (U.filter == "vendor" or U.filter == "merchant") and U.selected or nil
+        publish(only)
     end))
     for _, pair in ipairs({ { "PLAYER_TARGET_CHANGED", "target" }, { "UPDATE_MOUSEOVER_UNIT", "mouseover" } }) do
         required(core:Event(pair[1], function()
