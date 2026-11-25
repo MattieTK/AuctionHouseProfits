@@ -1031,6 +1031,60 @@ test("sort by profit per bag slot puts stackable deals first", function()
     SN:Sort()
 end)
 
+test("Buy under your price: one press buys every unit at or under it you can afford", function()
+    W.event("AUCTION_HOUSE_SHOW"); ah:Show(); settle()
+    AuctionHouseProfitsAHTab:GetScript("OnClick")(AuctionHouseProfitsAHTab); settle()
+    local U = ns.UI
+    assert(U:IsShown() and U.host == "ah")
+    U:Select(9999); settle()
+    SN:SetLimit(9999, 200); settle()
+    assert(U.buyButton.label:GetText() == "Trade goods only" and not U.buyButton:IsEnabled())
+    U:Select(14047); settle()
+    assert(U.buyButton.label:GetText() == "Set a price" and not U.buyButton:IsEnabled())
+    commodity[14047] = {
+        { unitPrice = 300, quantity = 25, numOwnerItems = 0, totalNumberOfOwners = 1, owners = { "Ann" } },
+        { unitPrice = 350, quantity = 30, numOwnerItems = 5, totalNumberOfOwners = 2, owners = { "Cy" } }, -- 5 are yours
+        { unitPrice = 351, quantity = 50, numOwnerItems = 0, totalNumberOfOwners = 1, owners = { "Bob" } }, -- 1c over
+    }
+    local boxes = U.limitInput.boxes
+    boxes[2]:SetText("3"); boxes[3]:SetText("50")
+    boxes[3]:GetScript("OnEnterPressed")(boxes[3]); settle()
+    assert(SN:Limit(14047) == 350, "3s 50c each")
+    U.scanButton:GetScript("OnClick")(U.scanButton); settle()
+    W.event("COMMODITY_SEARCH_RESULTS_UPDATED", 14047); settle()
+    local saved, before, units = wallet, #purchases, SN.session.units
+    assert(U.buyButton.label:GetText() == "Buy 50 for C16250", U.buyButton.label:GetText())
+    wallet = 12000 -- 25 at 3s, then 12 more at 3s 50c
+    W.event("PLAYER_MONEY"); settle()
+    assert(U.buyButton.label:GetText() == "Buy 37 for C11700" and U.buyButton:IsEnabled(), U.buyButton.label:GetText())
+    U.buyButton:GetScript("OnClick")(U.buyButton); settle()
+    assert(#purchases == before + 1 and purchases[#purchases].start == 14047 and purchases[#purchases].qty == 37,
+        "one press, the whole lot, no quantity to pick")
+    assert(U.buyButton.label:GetText() == "Buying..." and not U.buyButton:IsEnabled())
+    W.event("COMMODITY_PRICE_UPDATED", 316, 11700); settle()
+    assert(purchases[#purchases].confirm == 14047 and purchases[#purchases].qty == 37, "confirmed at the quoted total")
+    commodity[14047] = { { unitPrice = 360, quantity = 50, numOwnerItems = 0, totalNumberOfOwners = 1, owners = { "Bob" } } }
+    local scans = #searches
+    W.event("COMMODITY_PURCHASE_SUCCEEDED"); settle()
+    assert(not SN:IsBusy() and #searches == scans + 1 and searches[#searches] == 14047, "listings re-read after the buy")
+    assert(SN.session.units == units, "not counted as a vendor flip")
+    W.event("COMMODITY_SEARCH_RESULTS_UPDATED", 14047); settle()
+    assert(U.buyButton.label:GetText() == "None that cheap" and not U.buyButton:IsEnabled())
+    -- Someone bought the cheap units first: the server's total is over your price, so it's cancelled.
+    wallet = saved
+    commodity[14047] = { { unitPrice = 340, quantity = 10, numOwnerItems = 0, totalNumberOfOwners = 1, owners = { "Di" } } }
+    U.scanButton:GetScript("OnClick")(U.scanButton); settle()
+    W.event("COMMODITY_SEARCH_RESULTS_UPDATED", 14047); settle()
+    U.buyButton:GetScript("OnClick")(U.buyButton); settle()
+    assert(purchases[#purchases].start == 14047 and purchases[#purchases].qty == 10)
+    scans = #searches
+    W.event("COMMODITY_PRICE_UPDATED", 360, 3600); settle()
+    assert(purchases[#purchases].cancel and not SN:IsBusy(), "over 10 x 3s 50c: cancelled")
+    assert(#searches == scans + 1, "and the listings are read again")
+    SN:SetLimit(14047, nil); SN:SetLimit(9999, nil)
+    W.event("AUCTION_HOUSE_CLOSED"); ah:Hide(); settle()
+end)
+
 test("settings changes redraw an open view", function()
     ns.UI:ToggleWindow(); settle()
     ns.UI:Select(2320); settle()

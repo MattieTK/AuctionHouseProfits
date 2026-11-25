@@ -523,8 +523,23 @@ function U:BuildDetail(body)
     scan:SetPoint("TOPRIGHT", 0, -4)
     scan:SetScript("OnClick", function() U:ScanSelected() end)
     self.scanButton = scan
+    -- Buy under your price, beside Scan AH so scanning and buying are one
+    -- short move apart: the most you'll pay each, then Buy.
+    local buy = button(content, "buy-under", "Buy", 112)
+    buy:SetPoint("RIGHT", scan, "LEFT", -6, 0)
+    buy:SetScript("OnClick", function() U:BuyUnder() end)
+    buy:SetScript("OnEnter", function(self) U:BuyTooltip(self) end)
+    buy:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+    self.buyButton = buy
+    local limit = U.MoneyInput(content, function(parent, i) return control(parent, "limit" .. i, "input") end,
+        function(copper) if U.selected then ns.Snipe:SetLimit(U.selected, copper) end end)
+    limit:SetPoint("RIGHT", buy, "LEFT", -6, 0)
+    for _, b in ipairs(limit.boxes) do
+        b:SetScript("OnEnter", function(self) U:LimitTooltip(self) end)
+        b:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+    end
+    self.limitInput = limit
     local post = button(content, "post", "Post", 86)
-    post:SetPoint("RIGHT", scan, "LEFT", -6, 0)
     post:SetScript("OnClick", function() U:PostSelected() end)
     post:SetScript("OnEnter", function(self)
         if not GameTooltip or not U.current then return end
@@ -540,11 +555,11 @@ function U:BuildDetail(body)
     self.postButton = post
     local title = text(content, "GameFontNormalLarge", "heading")
     title:SetPoint("TOPLEFT", iconButton, "TOPRIGHT", 8, -1)
-    title:SetPoint("RIGHT", post, "LEFT", -8, 0)
+    title:SetPoint("RIGHT", limit, "LEFT", -8, 0)
     self.title = title
     local sub = text(content, "GameFontDisableSmall")
     sub:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -3)
-    sub:SetPoint("RIGHT", post, "LEFT", -8, 0)
+    sub:SetPoint("RIGHT", limit, "LEFT", -8, 0)
     self.sub = sub
 
     -- Price stats, with your listing price as gold/silver/copper boxes.
@@ -587,8 +602,10 @@ function U:BuildDetail(body)
     local cost = U.MoneyInput(content, function(parent, i) return control(parent, "cost" .. i, "input") end,
         function(copper) U:SetPlan("cost", copper) end)
     cost:SetPoint("TOPLEFT", 206, y - 13)
-    local reset = button(content, "reset-price", "Reset price", 84)
-    reset:SetPoint("TOPLEFT", 380, y - 13)
+    -- Post sits under your price, the price it lists at.
+    post:SetPoint("TOPLEFT", 380, y - 13)
+    local reset = button(content, "reset-price", "Reset", 62)
+    reset:SetPoint("LEFT", post, "RIGHT", 6, 0)
     reset:SetScript("OnClick", function() U:SetPlan("price", nil) end)
     reset:SetScript("OnEnter", function(self)
         if not GameTooltip then return end
@@ -979,6 +996,74 @@ function U:ScanSelected(quiet)
     self:RefreshDetail()
 end
 
+-- Buy every unit at or under your price that you can afford (a click only).
+function U:BuyUnder()
+    if not self.selected then return end
+    local ok, why = ns.Snipe:BuyUnder(self.selected)
+    if not ok and UIErrorsFrame and why then UIErrorsFrame:AddMessage(why, 1, .3, .3) end
+    self:RefreshBuy()
+end
+
+-- The Buy button and your price for the selected item. Cheap: it redraws on
+-- every search result and purchase step.
+function U:RefreshBuy()
+    if not self.buyButton or not self.panel or not self.panel:IsShown() then return end
+    local id, N = self.selected, ns.Snipe
+    if not id then return end
+    local limit = N:Limit(id)
+    self.limitInput:Set(limit)
+    local p = N.purchase
+    local label
+    if p and p.under and p.id == id then
+        label = "Buying..."
+        self.buyButton.ready = false
+    else
+        local b, why = N:UnderLimit(id)
+        if b then
+            label = "Buy " .. count(b.qty) .. " for " .. Money(b.cost)
+        elseif not limit then
+            label = "Set a price"
+        elseif why and why:find("^Only") then
+            label = "Trade goods only"
+        elseif why and why:find("^Not enough") then
+            label = "Not enough gold"
+        else
+            label = "None that cheap"
+        end
+        self.buyButton.ready = b ~= nil
+    end
+    self.buyButton.label:SetText(label)
+    self.buyButton:SetEnabled(P.ahOpen and self.buyButton.ready == true and not N:IsBusy())
+end
+
+function U:BuyTooltip(owner)
+    if not GameTooltip or not self.selected then return end
+    local N, id = ns.Snipe, self.selected
+    local limit = N:Limit(id)
+    local b, why = N:UnderLimit(id)
+    GameTooltip:SetOwner(owner, "ANCHOR_TOP")
+    GameTooltip:AddLine("Buy under your price")
+    if b then
+        GameTooltip:AddLine(string.format("%s at %s or less, %s in all (up to %s each).", count(b.qty),
+            Money(limit), Money(b.cost), Money(b.maxPrice)), 1, 1, 1, true)
+        GameTooltip:AddLine("The game quotes the total before anything is paid. If cheaper units have gone and it comes to more than "
+            .. Money(b.qty * limit) .. ", it's cancelled.", 1, 1, 1, true)
+    else
+        GameTooltip:AddLine(why or "Nothing to buy.", 1, 1, 1, true)
+    end
+    GameTooltip:AddLine("One press buys every unit at or under your price that you can afford, cheapest first. "
+        .. "Scan AH to look again; the listings are read again after each buy.", .62, .6, .56, true)
+    GameTooltip:Show()
+end
+
+function U:LimitTooltip(owner)
+    if not GameTooltip then return end
+    GameTooltip:SetOwner(owner, "ANCHOR_TOP")
+    GameTooltip:AddLine("The most you'll pay each")
+    GameTooltip:AddLine("Buy takes every unit listed at this price or less. Kept until you log out or reload.", 1, 1, 1, true)
+    GameTooltip:Show()
+end
+
 -- Units the Post button lists: your stacks x stack size, capped to your bags.
 function U:PostQuantity()
     local a = self.current
@@ -1078,6 +1163,7 @@ function U:RefreshDetail()
     local busy = ns.Post:IsBusy()
     self.postButton.label:SetText(busy and "Posting..." or ("Post " .. count(self:PostQuantity())))
     self.postButton:SetEnabled(self:CanPostSelected() == true)
+    self:RefreshBuy()
 
     -- Stats
     local s = self.stats

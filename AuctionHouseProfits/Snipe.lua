@@ -18,6 +18,7 @@ local N = {
     deals = {}, byID = {}, live = {}, items = {}, skipped = {}, listeners = {}, seq = 0,
     kinds = {},  -- [itemID] = "commodity" / "item", once known
     tried = {},  -- commodities bought (or tried) straight from the scan: check before the next
+    limits = {}, -- [itemID] = the most you'll pay each (Profits page Buy), this session only
     session = { buys = 0, units = 0, spent = 0, value = 0 },
 }
 ns.Snipe = N
@@ -445,6 +446,59 @@ function N:BuyNext()
     return true
 end
 
+---------------------------------------------------------------------------
+-- Buy under your price (the Profits page; call BuyUnder from a click only)
+---------------------------------------------------------------------------
+-- A price you set for one trade good, kept for this session. One press buys
+-- every unit at or under it that you can afford, through the same purchase
+-- as the sniper's, so only one of them buys at a time.
+function N:SetLimit(id, copper)
+    if not num(id) then return end
+    self.limits[id] = num(copper) and copper > 0 and math.floor(copper) or nil
+    notify()
+end
+
+function N:Limit(id) return self.limits[id] end
+
+-- What one press would buy under the limit: buy = { qty, cost, maxPrice },
+-- or nil and why not.
+function N:UnderLimit(id)
+    local limit = self.limits[id]
+    if not limit then return nil, "Set the most you'll pay each." end
+    local live = self.live[id]
+    if self:KindOf(id) == "item" or (live and live.kind == "item") then
+        return nil, "Only trade goods can be bought in one press."
+    end
+    if not live then return nil, "Scan the auction house." end
+    if live.stale then return nil, "Scan again for the listings now." end
+    local buy = M.BuyUnder(live.levels, limit, money())
+    if buy then return buy end
+    if M.BuyUnder(live.levels, limit) then return nil, "Not enough gold for one." end
+    return nil, "None at " .. M.MoneyText(limit) .. " or less."
+end
+
+function N:BuyUnder(id)
+    if self.purchase and clock() - self.purchase.time > PURCHASE_TIMEOUT then self.purchase = nil end
+    if not P.ahOpen then return false, "Open the auction house." end
+    if self.purchase then return false, "Waiting for the last purchase." end
+    local b, why = self:UnderLimit(id)
+    if not b then return false, why end
+    -- The server fills from the cheapest units; if some have gone, its total
+    -- comes to more, and anything over your price for all of them is cancelled.
+    self.purchase = { kind = "commodity", id = id, qty = b.qty, quoted = b.cost, limit = b.qty * self.limits[id],
+        stage = "price", time = clock(), under = true }
+    C_AuctionHouse.StartCommoditiesPurchase(id, b.qty)
+    notify()
+    return true
+end
+
+-- After a buy under your price, read the listings again so the next press
+-- sees what's left. A search needs no click, but waits for the AH throttle.
+function N:Rescan()
+    local id = self.rescan
+    if id and P.ahOpen and P:Scan(id) then self.rescan = nil end
+end
+
 local function confirm(p)
     p.stage = "confirm"
     C_AuctionHouse.ConfirmCommoditiesPurchase(p.id, p.qty)
@@ -469,6 +523,7 @@ end
 function N:OnThrottleReady()
     local p = self.purchase
     if p and p.stage == "ready" then confirm(p); return end
+    if self.rescan then self:Rescan(); return end
     if self.after then self.after(0, "snipe-next-check", function() N:Pump() end) end
 end
 
@@ -485,10 +540,13 @@ function N:Bought()
     local p = self.purchase
     if not p then return end
     self.purchase = nil
-    local s = self.session
-    s.buys, s.units = s.buys + 1, s.units + p.qty
-    s.spent, s.value = s.spent + (p.cost or p.quoted or 0), s.value + p.value
-    D:RecordEarning("snipe", { units = p.qty, spent = p.cost or p.quoted or 0, value = p.value }, time())
+    -- Buys under your price aren't vendor flips: they count when they sell.
+    if not p.under then
+        local s = self.session
+        s.buys, s.units = s.buys + 1, s.units + p.qty
+        s.spent, s.value = s.spent + (p.cost or p.quoted or 0), s.value + p.value
+        D:RecordEarning("snipe", { units = p.qty, spent = p.cost or p.quoted or 0, value = p.value }, time())
+    end
     local live = self.live[p.id]
     if p.kind == "item" and live and live.auctions then
         -- The game re-sends the row (with a new auction ID) after a purchase.
@@ -502,6 +560,7 @@ function N:Bought()
     elseif live then
         live.stale = true -- re-read the book before buying more
     end
+    if p.under then self.rescan = p.id; self:Rescan() end
     self:Evaluate(p.id)
 end
 
@@ -513,6 +572,7 @@ function N:Failed(message)
     local live = self.live[p.id]
     if live then live.stale = true end
     if message and UIErrorsFrame then UIErrorsFrame:AddMessage(message, 1, .82, 0) end
+    if p.under then self.rescan = p.id; self:Rescan() end
     self:Evaluate(p.id)
 end
 
@@ -684,7 +744,7 @@ function N:Attach(app, scope)
         if d and d.scan and not d.direct and not N.kinds[id] and N:KindOf(id) == "commodity" then N:Evaluate(id) end
     end)
     on("AUCTION_HOUSE_CLOSED", function()
-        N.purchase, N.full, N.checking = nil, nil, nil
+        N.purchase, N.full, N.checking, N.rescan = nil, nil, nil, nil
         -- Commodity books move while you're away; check again on return.
         for _, live in pairs(N.live) do if live.kind == "commodity" then live.stale = true end end
         N:RefreshLive()

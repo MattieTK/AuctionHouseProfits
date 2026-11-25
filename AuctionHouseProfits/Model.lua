@@ -617,6 +617,22 @@ function M.CommodityBuy(levels, sell, minProfit, basis, money)
     return { qty = qty, cost = cost, profit = profit, maxPrice = top, best = sell - first }
 end
 
+-- Every unit of a commodity at or under limit each, cheapest first, as many
+-- as money pays for. levels as for CommodityBuy. nil if none.
+function M.BuyUnder(levels, limit, money)
+    if not M.Number(limit) or limit <= 0 or type(levels) ~= "table" then return nil end
+    local qty, cost, top = 0, 0, nil
+    for _, l in ipairs(levels) do
+        if not M.Number(l.price) or l.price > limit then break end
+        local take = (l.qty or 0) - (l.mine or 0)
+        if M.Number(money) and l.price > 0 then take = min(take, floor((money - cost) / l.price)) end
+        if take > 0 then qty, cost, top = qty + take, cost + take * l.price, l.price end
+        if M.Number(money) and money - cost < l.price then break end
+    end
+    if qty == 0 then return nil end
+    return { qty = qty, cost = cost, maxPrice = top }
+end
+
 -- Which item (non-commodity) auctions to buy, best first. The AH groups
 -- identical auctions into one row: qty is how many, buyout is the price of
 -- each, and one purchase buys one of them. auctions: { auctionID, qty,

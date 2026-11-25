@@ -1,7 +1,7 @@
 local ADDON, ns = ...
 local M, D, P, R, U, T = ns.Model, ns.Data, ns.Prices, ns.Merchant, ns.UI, ns.AuctionTab
 local S, B, N, SP = ns.Post, ns.AuctionsBar, ns.Snipe, ns.SnipePanel
-local VERSION = "0.4.6"
+local VERSION = "0.4.7"
 
 -- WoW Forever only (interface 16001). Other clients have different AH rules.
 local interface = select(4, GetBuildInfo())
@@ -102,7 +102,7 @@ app:OnReady(function()
     P:OnChange(function() publish() end)
     N.after = function(delay, key, fn) core:After(delay, key, fn) end
     N:Attach(app, core)
-    N:OnChange(function() SP:RequestRefresh() end)
+    N:OnChange(function() SP:RequestRefresh(); U:RefreshBuy() end)
     P:OnChange(function() SP:RequestRefresh() end)
     S:Attach(app, core)
     S:OnChange(function(id)

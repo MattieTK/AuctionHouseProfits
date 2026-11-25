@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.7
+
+- **Buy under your price, in one press.** On a trade good's page in the Profits tab, set the most you'll pay each in the boxes at the top right. The **Buy** button beside **Scan AH** then says what one press gets ("Buy 37 for 1g 11s"): every unit listed at your price or less that you can afford, cheapest first, with no quantity to pick and no confirm step. Scan, buy, scan again, with the two buttons side by side. The game quotes the total before anything is paid. If cheaper units have gone and it comes to more than your price for all of them, the purchase is cancelled. The listings are searched again after each buy. Your price lasts until you log out or reload. Trade goods only: gear is bought one auction at a time.
+- **Post moved under "Your price",** the price it lists at, with a shorter **Reset** beside it, to make room for the Buy row.
+
 ## 0.4.6
 
 - **Items vendors refuse are left out, whatever sell price they show.** Some items show a vendor price on their tooltip, but every vendor answers "The merchant doesn't want that item." The sniper no longer lists them as deals or rechecks them, and on the Profits tab unsold stacks of them aren't counted as sold to a vendor. The first is Instant Poison (Rank 1). More get added as they're reported.

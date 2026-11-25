@@ -316,6 +316,18 @@ test("vendor pays nothing for items it refuses, whatever their sell price", func
     assert(M.VendorPays(6947, 25) == 0, "shows a sell price, vendors refuse it")
 end)
 
+test("buy under a price: every unit at or under it, not your own, as far as your gold goes", function()
+    local levels = { { price = 300, qty = 25, mine = 0 }, { price = 350, qty = 30, mine = 5 }, { price = 351, qty = 50, mine = 0 } }
+    local b = M.BuyUnder(levels, 350)
+    assert(b.qty == 50 and b.cost == 25 * 300 + 25 * 350 and b.maxPrice == 350, "your 5 and the 1c-over level left out")
+    b = M.BuyUnder(levels, 350, 12000)
+    assert(b.qty == 37 and b.cost == 7500 + 12 * 350, "as many as your gold pays for")
+    b = M.BuyUnder(levels, 320, 100000)
+    assert(b.qty == 25 and b.maxPrice == 300)
+    assert(M.BuyUnder(levels, 299) == nil and M.BuyUnder(levels, 350, 299) == nil)
+    assert(M.BuyUnder(levels, nil) == nil and M.BuyUnder(nil, 350) == nil)
+end)
+
 test("vendor snipe: per unit or per purchase", function()
     -- A vendor pays 50c each; you want 10c.
     assert(M.VendorDeal(40, 1, 50, 10, "unit") == 10)
