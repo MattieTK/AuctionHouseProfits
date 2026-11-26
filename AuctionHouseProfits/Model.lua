@@ -618,19 +618,51 @@ function M.CommodityBuy(levels, sell, minProfit, basis, money)
 end
 
 -- Every unit of a commodity at or under limit each, cheapest first, as many
--- as money pays for. levels as for CommodityBuy. nil if none.
-function M.BuyUnder(levels, limit, money)
+-- as money pays for, and no more than most. levels as for CommodityBuy. nil
+-- if none.
+function M.BuyUnder(levels, limit, money, most)
     if not M.Number(limit) or limit <= 0 or type(levels) ~= "table" then return nil end
     local qty, cost, top = 0, 0, nil
     for _, l in ipairs(levels) do
         if not M.Number(l.price) or l.price > limit then break end
         local take = (l.qty or 0) - (l.mine or 0)
         if M.Number(money) and l.price > 0 then take = min(take, floor((money - cost) / l.price)) end
+        if M.Number(most) then take = min(take, most - qty) end
         if take > 0 then qty, cost, top = qty + take, cost + take * l.price, l.price end
         if M.Number(money) and money - cost < l.price then break end
+        if M.Number(most) and qty >= most then break end
     end
     if qty == 0 then return nil end
     return { qty = qty, cost = cost, maxPrice = top }
+end
+
+-- How many of n cheap units to ask for in one purchase. Others are after the
+-- same units, and the server fills a purchase from the cheapest left: ask for
+-- all of them and if anyone beats you to some, the rest come from dearer
+-- listings and the whole purchase is cancelled. So up to BUY_ALL_UPTO, all of
+-- them; past that, half (never fewer than BUY_ALL_UPTO). Each miss in a row
+-- halves it again, down to one.
+M.BUY_ALL_UPTO = 5
+function M.BuyShare(n, misses)
+    n = M.Number(n) and floor(n) or 0
+    if n <= 0 then return 0 end
+    local q = n <= M.BUY_ALL_UPTO and n or max(M.BUY_ALL_UPTO, math.ceil(n / 2))
+    for _ = 1, M.Number(misses) and misses or 0 do q = math.ceil(q / 2) end
+    return max(1, min(n, q))
+end
+
+-- levels with the qty cheapest units (not your own) taken out: the book
+-- after you bought them.
+function M.TakeCheapest(levels, qty)
+    local out, left = {}, M.Number(qty) and qty or 0
+    for _, l in ipairs(type(levels) == "table" and levels or {}) do
+        local take = min(left, max(0, (l.qty or 0) - (l.mine or 0)))
+        left = left - take
+        if (l.qty or 0) - take > 0 then
+            out[#out + 1] = { price = l.price, qty = l.qty - take, mine = l.mine }
+        end
+    end
+    return out
 end
 
 -- Which item (non-commodity) auctions to buy, best first. The AH groups

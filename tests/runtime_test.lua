@@ -1071,7 +1071,7 @@ test("sort by profit per bag slot puts stackable deals first", function()
     SN:Sort()
 end)
 
-test("Buy under your price: one press buys every unit at or under it you can afford", function()
+test("Buy under your price: one press buys a share of the units at or under it you can afford", function()
     W.event("AUCTION_HOUSE_SHOW"); ah:Show(); settle()
     AuctionHouseProfitsAHTab:GetScript("OnClick")(AuctionHouseProfitsAHTab); settle()
     local U = ns.UI
@@ -1093,34 +1093,59 @@ test("Buy under your price: one press buys every unit at or under it you can aff
     U.scanButton:GetScript("OnClick")(U.scanButton); settle()
     W.event("COMMODITY_SEARCH_RESULTS_UPDATED", 14047); settle()
     local saved, before, units = wallet, #purchases, SN.session.units
-    assert(U.buyButton.label:GetText() == "Buy 50 for C16250", U.buyButton.label:GetText())
-    wallet = 12000 -- 25 at 3s, then 12 more at 3s 50c
+    assert(U.buyButton.label:GetText() == "Buy 25 for C7500", "half of the 50 at your price: " .. U.buyButton.label:GetText())
+    wallet = 12000 -- 25 at 3s, then 12 more at 3s 50c: 37, so 19
     W.event("PLAYER_MONEY"); settle()
-    assert(U.buyButton.label:GetText() == "Buy 37 for C11700" and U.buyButton:IsEnabled(), U.buyButton.label:GetText())
+    assert(U.buyButton.label:GetText() == "Buy 19 for C5700" and U.buyButton:IsEnabled(), U.buyButton.label:GetText())
     U.buyButton:GetScript("OnClick")(U.buyButton); settle()
-    assert(#purchases == before + 1 and purchases[#purchases].start == 14047 and purchases[#purchases].qty == 37,
-        "one press, the whole lot, no quantity to pick")
+    assert(#purchases == before + 1 and purchases[#purchases].start == 14047 and purchases[#purchases].qty == 19,
+        "one press, no quantity to pick")
     assert(U.buyButton.label:GetText() == "Buying..." and not U.buyButton:IsEnabled())
-    W.event("COMMODITY_PRICE_UPDATED", 316, 11700); settle()
-    assert(purchases[#purchases].confirm == 14047 and purchases[#purchases].qty == 37, "confirmed at the quoted total")
+    W.event("COMMODITY_PRICE_UPDATED", 300, 5700); settle()
+    assert(purchases[#purchases].confirm == 14047 and purchases[#purchases].qty == 19, "confirmed at the quoted total")
+    -- Some went before the confirm reached the server: it quotes again rather than charging more.
+    W.event("COMMODITY_PRICE_UPDATED", 310, 5900); settle()
+    assert(#purchases == before + 3 and purchases[#purchases].confirm == 14047, "still under 19 x 3s 50c: confirmed again")
     commodity[14047] = { { unitPrice = 360, quantity = 50, numOwnerItems = 0, totalNumberOfOwners = 1, owners = { "Bob" } } }
     local scans = #searches
-    W.event("COMMODITY_PURCHASE_SUCCEEDED"); settle()
-    assert(not SN:IsBusy() and #searches == scans + 1 and searches[#searches] == 14047, "listings re-read after the buy")
+    W.event("COMMODITY_PURCHASE_SUCCEEDED"); W.tick(0.1)
+    assert(not SN:IsBusy() and #searches == scans, "the next press gets the AH first, not a search")
     assert(SN.session.units == units, "not counted as a vendor flip")
+    -- Until the search answers, the next press goes from what's left: 6 at 3s and 25 at 3s 50c, so 16.
+    assert(U.buyButton.label:GetText() == "Buy 16 for ~C5300" and U.buyButton:IsEnabled(), U.buyButton.label:GetText())
+    settle(); settle()
+    assert(#searches == scans + 1 and searches[#searches] == 14047, "listings re-read once you pause")
     W.event("COMMODITY_SEARCH_RESULTS_UPDATED", 14047); settle()
     assert(U.buyButton.label:GetText() == "None that cheap" and not U.buyButton:IsEnabled())
-    -- Someone bought the cheap units first: the server's total is over your price, so it's cancelled.
+    -- Someone bought the cheap units first: the server's total is over your price, so it's cancelled,
+    -- and the next press asks for fewer, without waiting for the search.
     wallet = saved
     commodity[14047] = { { unitPrice = 340, quantity = 10, numOwnerItems = 0, totalNumberOfOwners = 1, owners = { "Di" } } }
     U.scanButton:GetScript("OnClick")(U.scanButton); settle()
     W.event("COMMODITY_SEARCH_RESULTS_UPDATED", 14047); settle()
+    assert(U.buyButton.label:GetText() == "Buy 5 for C1700", "half of 10: " .. U.buyButton.label:GetText())
     U.buyButton:GetScript("OnClick")(U.buyButton); settle()
-    assert(purchases[#purchases].start == 14047 and purchases[#purchases].qty == 10)
+    assert(purchases[#purchases].start == 14047 and purchases[#purchases].qty == 5)
     scans = #searches
-    W.event("COMMODITY_PRICE_UPDATED", 360, 3600); settle()
-    assert(purchases[#purchases].cancel and not SN:IsBusy(), "over 10 x 3s 50c: cancelled")
-    assert(#searches == scans + 1, "and the listings are read again")
+    W.event("COMMODITY_PRICE_UPDATED", 360, 1800); settle()
+    assert(purchases[#purchases].cancel and not SN:IsBusy(), "over 5 x 3s 50c: cancelled")
+    assert(UIErrorsFrame.lines[#UIErrorsFrame.lines]:find("^Someone was quicker"), UIErrorsFrame.lines[#UIErrorsFrame.lines])
+    assert(U.buyButton.label:GetText() == "Buy 3 for ~C1020" and U.buyButton:IsEnabled(), U.buyButton.label:GetText())
+    U.buyButton:GetScript("OnClick")(U.buyButton); settle()
+    assert(purchases[#purchases].start == 14047 and purchases[#purchases].qty == 3, "tried again at once, for fewer")
+    settle(); settle()
+    assert(#searches == scans, "no search mid-purchase")
+    W.event("COMMODITY_PRICE_UPDATED", 340, 1020); settle()
+    W.event("COMMODITY_PURCHASE_SUCCEEDED"); W.tick(0.1)
+    assert((SN.misses[14047] or 0) == 0, "a buy that goes through resets the misses")
+    assert(U.buyButton.label:GetText() == "Buy 5 for ~C1700", U.buyButton.label:GetText())
+    -- Re-quoted over your price after the confirm: cancelled.
+    U.buyButton:GetScript("OnClick")(U.buyButton); settle()
+    W.event("COMMODITY_PRICE_UPDATED", 340, 1700); settle()
+    W.event("COMMODITY_PRICE_UPDATED", 400, 2000); settle()
+    assert(purchases[#purchases].cancel and not SN:IsBusy() and SN.misses[14047] == 1)
+    settle(); settle()
+    assert(#searches == scans + 1 and searches[#searches] == 14047, "read again once you pause")
     SN:SetLimit(14047, nil); SN:SetLimit(9999, nil)
     W.event("AUCTION_HOUSE_CLOSED"); ah:Hide(); settle()
 end)

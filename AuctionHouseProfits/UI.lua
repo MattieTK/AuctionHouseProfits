@@ -1020,7 +1020,7 @@ function U:RefreshBuy()
     else
         local b, why = N:UnderLimit(id)
         if b then
-            label = "Buy " .. count(b.qty) .. " for " .. Money(b.cost)
+            label = "Buy " .. count(b.qty) .. " for " .. (b.guess and "~" or "") .. Money(b.cost)
         elseif not limit then
             label = "Set a price"
         elseif why and why:find("^Only") then
@@ -1044,15 +1044,28 @@ function U:BuyTooltip(owner)
     GameTooltip:SetOwner(owner, "ANCHOR_TOP")
     GameTooltip:AddLine("Buy under your price")
     if b then
-        GameTooltip:AddLine(string.format("%s at %s or less, %s in all (up to %s each).", count(b.qty),
-            Money(limit), Money(b.cost), Money(b.maxPrice)), 1, 1, 1, true)
+        if b.of > b.qty then
+            GameTooltip:AddLine(string.format("%s of the %s at %s or less you can afford, %s in all (up to %s each).",
+                count(b.qty), count(b.of), Money(limit), Money(b.cost), Money(b.maxPrice)), 1, 1, 1, true)
+        else
+            GameTooltip:AddLine(string.format("%s at %s or less, %s in all (up to %s each).", count(b.qty),
+                Money(limit), Money(b.cost), Money(b.maxPrice)), 1, 1, 1, true)
+        end
+        if b.misses > 0 then
+            GameTooltip:AddLine(string.format("Missed %d in a row, so asking for fewer. A buy that goes through resets it.",
+                b.misses), 1, .82, 0, true)
+        end
+        if b.guess then
+            GameTooltip:AddLine("~ Listings as of your last press; they're being read again.", 1, .82, 0, true)
+        end
         GameTooltip:AddLine("The game quotes the total before anything is paid. If cheaper units have gone and it comes to more than "
             .. Money(b.qty * limit) .. ", it's cancelled.", 1, 1, 1, true)
     else
         GameTooltip:AddLine(why or "Nothing to buy.", 1, 1, 1, true)
     end
-    GameTooltip:AddLine("One press buys every unit at or under your price that you can afford, cheapest first. "
-        .. "Scan AH to look again; the listings are read again after each buy.", .62, .6, .56, true)
+    GameTooltip:AddLine(string.format("Others buy the same cheap units. Ask for all of them and if anyone beats you to some, "
+        .. "the rest come from dearer listings and it's cancelled. So one press takes up to %d, or half when there are more, "
+        .. "and half again after each miss. Press again for the rest.", M.BUY_ALL_UPTO), .62, .6, .56, true)
     GameTooltip:Show()
 end
 
@@ -1060,7 +1073,8 @@ function U:LimitTooltip(owner)
     if not GameTooltip then return end
     GameTooltip:SetOwner(owner, "ANCHOR_TOP")
     GameTooltip:AddLine("The most you'll pay each")
-    GameTooltip:AddLine("Buy takes every unit listed at this price or less. Kept until you log out or reload.", 1, 1, 1, true)
+    GameTooltip:AddLine("Buy takes units listed at this price or less, a share at a time. Kept until you log out or reload.",
+        1, 1, 1, true)
     GameTooltip:Show()
 end
 

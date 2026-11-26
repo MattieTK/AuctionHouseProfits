@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.9
+
+- **Fixed: a buy could hang on "Buying..." for 10 seconds.** The game doesn't hold units while it quotes you: if some are bought before your confirm reaches it, it quotes the new total and waits for another confirm (Blizzard's buy dialog shows "price updated"). The add-on ignored that second quote, so the purchase sat until it timed out. Now it confirms again if the new total is still within your price, and cancels if not. This applies to the sniper too.
+- **Buy under your price asks for a share, not the whole lot.** Others are after the same cheap units, and the game fills a purchase from the cheapest left. Ask for all 50 and if anyone beats you to some, the rest come from dearer listings, the total goes over your price, and the whole purchase is cancelled. So one press asks for all of them up to 5, or half when there are more (50 asks for 25). Each miss in a row halves it again, down to one, so you get some rather than none. A buy that goes through resets it, and so does changing your price.
+- **Press again straight away.** After a buy, the button offers the next share of what's left, and after a miss a smaller one, without waiting for the listings to be searched again. The price shows `~` until they are. That search now waits until you pause for a moment and never runs mid-purchase, so it doesn't hold up your next press.
+
 ## 0.4.8
 
 - **Fixed: Scan AH froze the game for a moment.** Each search result re-analysed every item in the list on the left, including their prices from other add-ons and their deposits, two or more times per scan. Now a search redraws only the item searched. Clicking an item in the list and buying (which changes your bags) no longer re-analyse the whole list either, so scanning and buying feel as quick as Blizzard's own refresh. Changing the filter, search, sort or settings still redraws everything.

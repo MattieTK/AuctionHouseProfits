@@ -19,6 +19,7 @@ local N = {
     kinds = {},  -- [itemID] = "commodity" / "item", once known
     tried = {},  -- commodities bought (or tried) straight from the scan: check before the next
     limits = {}, -- [itemID] = the most you'll pay each (Profits page Buy), this session only
+    misses = {}, -- [itemID] = buys under your price missed in a row: ask for fewer each time
     session = { buys = 0, units = 0, spent = 0, value = 0 },
 }
 ns.Snipe = N
@@ -28,6 +29,8 @@ local FULL_SCAN_WAIT = 30      -- seconds to wait for the game to send a full sc
 local READ_BATCH = 500         -- auctions read per frame; reading too fast can disconnect
 local SEARCH_TIMEOUT = 6
 local PURCHASE_TIMEOUT = 10
+local MAX_REQUOTES = 3         -- confirms again after the server re-quotes one purchase
+local RESCAN_QUIET = 0.75      -- after a buy under your price, leave the AH to your next press first
 local RECHECK_LIMIT = 60
 
 local function readable(v) return not (issecretvalue and issecretvalue(v)) end
@@ -450,18 +453,21 @@ end
 -- Buy under your price (the Profits page; call BuyUnder from a click only)
 ---------------------------------------------------------------------------
 -- A price you set for one trade good, kept for this session. One press buys
--- every unit at or under it that you can afford, through the same purchase
--- as the sniper's, so only one of them buys at a time.
+-- units at or under it that you can afford (see M.BuyShare for how many),
+-- through the same purchase as the sniper's, so only one of them buys at a
+-- time.
 function N:SetLimit(id, copper)
     if not num(id) then return end
     self.limits[id] = num(copper) and copper > 0 and math.floor(copper) or nil
+    self.misses[id] = nil
     notify()
 end
 
 function N:Limit(id) return self.limits[id] end
 
--- What one press would buy under the limit: buy = { qty, cost, maxPrice },
--- or nil and why not.
+-- What one press would buy under the limit: buy = { qty, cost, maxPrice, of
+-- (units at your price you can afford), misses, guess (the listings are as
+-- of your last press, not a search) }, or nil and why not.
 function N:UnderLimit(id)
     local limit = self.limits[id]
     if not limit then return nil, "Set the most you'll pay each." end
@@ -470,11 +476,18 @@ function N:UnderLimit(id)
         return nil, "Only trade goods can be bought in one press."
     end
     if not live then return nil, "Scan the auction house." end
-    if live.stale then return nil, "Scan again for the listings now." end
-    local buy = M.BuyUnder(live.levels, limit, money())
-    if buy then return buy end
-    if M.BuyUnder(live.levels, limit) then return nil, "Not enough gold for one." end
-    return nil, "None at " .. M.MoneyText(limit) .. " or less."
+    -- After a press, the book is our best guess until it's read again: the
+    -- quote is the check, so the next press needn't wait for the search.
+    if live.stale and not live.adjusted then return nil, "Scan again for the listings now." end
+    local all = M.BuyUnder(live.levels, limit, money())
+    if not all then
+        if M.BuyUnder(live.levels, limit) then return nil, "Not enough gold for one." end
+        return nil, "None at " .. M.MoneyText(limit) .. " or less."
+    end
+    local misses = self.misses[id] or 0
+    local buy = M.BuyUnder(live.levels, limit, money(), M.BuyShare(all.qty, misses))
+    buy.of, buy.misses, buy.guess = all.qty, misses, live.adjusted == true
+    return buy
 end
 
 function N:BuyUnder(id)
@@ -492,11 +505,24 @@ function N:BuyUnder(id)
     return true
 end
 
--- After a buy under your price, read the listings again so the next press
--- sees what's left. A search needs no click, but waits for the AH throttle.
+-- After a buy under your price, read the listings again so the button shows
+-- what's left. A search needs no click, but it uses the AH throttle, and the
+-- next press doesn't need it (it goes from what's left as far as we know),
+-- so the search waits until you've paused, and never runs mid-purchase.
 function N:Rescan()
     local id = self.rescan
-    if id and P.ahOpen and P:Scan(id) then self.rescan = nil end
+    if not id or not P.ahOpen or self.purchase then return end
+    local wait = (self.quietUntil or 0) - clock()
+    if wait > 0 then
+        if self.after then self.after(wait, "snipe-rescan", function() N:Rescan() end) end
+        return
+    end
+    if P:Scan(id) then self.rescan = nil end
+end
+
+function N:RescanSoon(id)
+    self.rescan, self.quietUntil = id, clock() + RESCAN_QUIET
+    self:Rescan()
 end
 
 local function confirm(p)
@@ -504,18 +530,30 @@ local function confirm(p)
     C_AuctionHouse.ConfirmCommoditiesPurchase(p.id, p.qty)
 end
 
--- The server's price for the commodity purchase we started.
+-- The server's price for the commodity purchase we started. The quote isn't
+-- a hold on the units: if some are bought before our confirm reaches the
+-- server, it doesn't charge more, it quotes again and waits for another
+-- confirm (Blizzard's dialog shows "price updated"). So a quote after the
+-- confirm is checked the same way and confirmed again if it's still in.
 function N:OnPrice(unitPrice, totalPrice)
     local p = self.purchase
-    if not p or p.kind ~= "commodity" or p.stage ~= "price" then return end
+    if not p or p.kind ~= "commodity" then return end
+    if p.stage ~= "price" and p.stage ~= "ready" and p.stage ~= "confirm" then return end
     local total = num(totalPrice)
-    if total and total <= p.limit and total <= money() then
-        p.cost = total
+    if p.stage == "confirm" then p.requotes = (p.requotes or 0) + 1 end
+    if total and total <= p.limit and total <= money() and (p.requotes or 0) <= MAX_REQUOTES then
+        p.cost, p.time = total, clock()
         local ready = not C_AuctionHouse.IsThrottledMessageSystemReady or C_AuctionHouse.IsThrottledMessageSystemReady()
         if ready then confirm(p) else p.stage = "ready" end
     else
         if C_AuctionHouse.CancelCommoditiesPurchase then C_AuctionHouse.CancelCommoditiesPurchase() end
-        self:Failed(total and ("The price went up to " .. M.MoneyText(total) .. ". Checking again.") or nil)
+        local message
+        if total and p.under then
+            message = "Someone was quicker: " .. M.MoneyText(total) .. " for " .. p.qty .. " is over your price. Press again for fewer."
+        elseif total then
+            message = "The price went up to " .. M.MoneyText(total) .. ". Checking again."
+        end
+        self:Failed(message)
     end
     notify()
 end
@@ -559,8 +597,15 @@ function N:Bought()
         end
     elseif live then
         live.stale = true -- re-read the book before buying more
+        if p.under then
+            -- What's left, as far as we know, so the next press can go now.
+            live.levels, live.adjusted = M.TakeCheapest(live.levels, p.qty), true
+        end
     end
-    if p.under then self.rescan = p.id; self:Rescan() end
+    if p.under then
+        self.misses[p.id] = nil
+        self:RescanSoon(p.id)
+    end
     self:Evaluate(p.id)
 end
 
@@ -572,7 +617,13 @@ function N:Failed(message)
     local live = self.live[p.id]
     if live then live.stale = true end
     if message and UIErrorsFrame then UIErrorsFrame:AddMessage(message, 1, .82, 0) end
-    if p.under then self.rescan = p.id; self:Rescan() end
+    if p.under then
+        -- Others are buying them too: ask for fewer next time, and don't wait
+        -- for the search to try again.
+        self.misses[p.id] = (self.misses[p.id] or 0) + 1
+        if live then live.adjusted = true end
+        self:RescanSoon(p.id)
+    end
     self:Evaluate(p.id)
 end
 
@@ -744,9 +795,11 @@ function N:Attach(app, scope)
         if d and d.scan and not d.direct and not N.kinds[id] and N:KindOf(id) == "commodity" then N:Evaluate(id) end
     end)
     on("AUCTION_HOUSE_CLOSED", function()
-        N.purchase, N.full, N.checking, N.rescan = nil, nil, nil, nil
+        N.purchase, N.full, N.checking, N.rescan, N.misses = nil, nil, nil, nil, {}
         -- Commodity books move while you're away; check again on return.
-        for _, live in pairs(N.live) do if live.kind == "commodity" then live.stale = true end end
+        for _, live in pairs(N.live) do
+            if live.kind == "commodity" then live.stale, live.adjusted = true, nil end
+        end
         N:RefreshLive()
     end)
     on("PLAYER_MONEY", function() if next(N.live) then N:RefreshLive() end end)
