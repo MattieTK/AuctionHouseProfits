@@ -332,13 +332,37 @@ test("buy under a price: every unit at or under it, not your own, as far as your
     assert(b.qty == 10 and b.cost == 3000 and b.maxPrice == 300)
 end)
 
-test("buy under a price: all of a few, half of many, half again after each miss", function()
-    assert(M.BuyShare(1) == 1 and M.BuyShare(2) == 2 and M.BuyShare(5) == 5, "a few: all of them")
-    assert(M.BuyShare(6) == 5 and M.BuyShare(10) == 5, "never fewer than 5 while there are 5")
-    assert(M.BuyShare(11) == 6 and M.BuyShare(50) == 25 and M.BuyShare(37) == 19, "many: half, rounded up")
-    assert(M.BuyShare(50, 1) == 13 and M.BuyShare(50, 2) == 7 and M.BuyShare(50, 5) == 1, "each miss halves it")
-    assert(M.BuyShare(2, 1) == 1 and M.BuyShare(1, 3) == 1, "down to one, never none")
-    assert(M.BuyShare(0) == 0 and M.BuyShare(nil) == 0)
+test("buy under a price: as many as still go through if others take half first", function()
+    local function levels(...)
+        local out = {}
+        for i = 1, select("#", ...), 2 do out[#out + 1] = { price = select(i, ...), qty = select(i + 1, ...), mine = 0 } end
+        return out
+    end
+    -- A few: all of them.
+    local b = M.UnderShare(levels(100, 3, 300, 50), 200)
+    assert(b.qty == 3 and b.of == 3 and b.cost == 300)
+    -- Just under your price, nothing spare for dearer units: half.
+    b = M.UnderShare(levels(199, 15, 300, 20), 200)
+    assert(b.qty == 8 and b.of == 15, "8 of 15 at 1s 99c: " .. b.qty)
+    -- Well under: each leaves 1s towards a 3s unit, so all 15 survive losing 7.
+    b = M.UnderShare(levels(100, 15, 300, 20), 200)
+    assert(b.qty == 15 and b.cost == 1500, "all 15 at 1s: " .. b.qty)
+    -- With nothing listed above, only the half others don't take can fill it.
+    b = M.UnderShare(levels(100, 15), 200)
+    assert(b.qty == 8, "nothing dearer to fill from: " .. b.qty)
+    -- Never fewer than 5 while there are 5.
+    assert(M.UnderShare(levels(199, 6, 300, 20), 200).qty == 5)
+    -- Each miss halves it, down to one.
+    assert(M.UnderShare(levels(100, 15, 300, 20), 200, nil, 1).qty == 8)
+    assert(M.UnderShare(levels(100, 15, 300, 20), 200, nil, 2).qty == 4)
+    assert(M.UnderShare(levels(100, 15, 300, 20), 200, nil, 9).qty == 1)
+    -- Your gold counts both for what you buy and for what a dearer fill would cost.
+    local book = { { price = 300, qty = 25, mine = 0 }, { price = 350, qty = 30, mine = 5 }, { price = 351, qty = 50, mine = 0 } }
+    b = M.UnderShare(book, 350)
+    assert(b.qty == 25 and b.of == 50 and b.cost == 7500)
+    b = M.UnderShare(book, 350, 12000)
+    assert(b.of == 37 and b.qty == 35 and b.cost == 25 * 300 + 10 * 350, b.qty .. " " .. b.cost)
+    assert(M.UnderShare(book, 299) == nil and M.UnderShare(nil, 350) == nil)
 end)
 
 test("what's left after buying the cheapest units, not your own", function()

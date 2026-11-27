@@ -4,8 +4,10 @@
 -- Finding deals needs no clicks. A full scan (C_AuctionHouse.ReplicateItems,
 -- once every 15 minutes per account) lists every auction for an estimate.
 -- Any search result for an item (ours, Blizzard's Buy page, other add-ons')
--- is checked against its live listings, and Pump() searches each estimated
--- deal in turn so the top of the list is usually checked before you press Buy.
+-- is checked against its live listings. The sniper doesn't search on its own:
+-- pressing Buy on a deal that needs checking searches it, and the only other
+-- searching in the background is watching the item on the Profits page while
+-- you have a price set for it (see Watched).
 --
 -- Buying needs a hardware event: PlaceBid and StartCommoditiesPurchase only
 -- work from a click or key press, so BuyNext() must run from one. One press
@@ -31,6 +33,7 @@ local SEARCH_TIMEOUT = 6
 local PURCHASE_TIMEOUT = 10
 local MAX_REQUOTES = 3         -- confirms again after the server re-quotes one purchase
 local RESCAN_QUIET = 0.75      -- after a buy under your price, leave the AH to your next press first
+local WATCH_GAP = 0.4          -- between one answer and the next search of the item you're watching
 local RECHECK_LIMIT = 60
 
 local function readable(v) return not (issecretvalue and issecretvalue(v)) end
@@ -240,13 +243,20 @@ end
 -- A search answered: check the next deal straight away, not on the timer.
 function N:Answered(id)
     if self.checking == id then self.checking = nil end
-    if self.after then self.after(0, "snipe-next-check", function() N:Pump() end) end
+    if self.after then
+        self.after(0, "snipe-next-check", function() N:Pump() end)
+        if not self.checking then self.after(0, "snipe-rescan", function() N:Rescan() end) end
+    end
 end
 
 function N:OnCommodityResults(itemID)
     local id = num(itemID)
     if not id or not C_AuctionHouse.GetNumCommoditySearchResults then return end
     self.lastSearch = id
+    if id == self:Watched() or id == self.rescan then
+        self.watchNext = clock() + WATCH_GAP
+        if self.after then self.after(WATCH_GAP, "snipe-rescan", function() N:Rescan() end) end
+    end
     local n = num(C_AuctionHouse.GetNumCommoditySearchResults(id)) or 0
     if n == 0 then
         local full = C_AuctionHouse.HasFullCommoditySearchResults and C_AuctionHouse.HasFullCommoditySearchResults(id)
@@ -369,36 +379,32 @@ function N:Pump()
     if self.full and self.full.stage == "waiting" then return end
     if P.pending and now - P.pending.time < 3 then return end
     local id = self:NextCheck()
-    if id then self:Search(id); return end
-    if self.full then return end
-    -- Gear is bought by auction ID, as Blizzard's Buy page does from the
-    -- item's latest search; keep the top deal's search the latest one.
-    local head = self:Deals()[1]
-    if head and head.kind == "item" and self.lastSearch ~= head.id then self:Search(head.id) end
+    if id then self:Search(id) end
 end
 
--- What to search next. A deal you pressed Buy on comes first. While a full
--- scan is read, its best-looking gear starts being checked before the read
--- ends. Commodities from the scan need no check (see Compute).
+-- What to search next: only a deal you pressed Buy on. Nothing is searched
+-- in the background, so the AH is left to the item you're watching (and
+-- commodities from the scan need no check: see Compute).
 function N:NextCheck()
     local want = self.priority
     self.priority = nil
-    if want and self.byID[want] and not self.byID[want].verified and not self.byID[want].direct then return want end
-    local f = self.full
-    if f then
-        local best, bestEach
-        for id, each in pairs(f.candidates or {}) do
-            if not f.checked[id] and not self.skipped[id] and self:KindOf(id) ~= "commodity"
-                and (not bestEach or each > bestEach or (each == bestEach and id < best)) then
-                best, bestEach = id, each
-            end
-        end
-        if best then f.checked[best] = true end
-        return best
-    end
-    for _, d in ipairs(self:Deals()) do
-        if not d.verified and not d.direct then return d.id end
-    end
+    if want and self:NeedsCheck(self.byID[want]) then return want end
+end
+
+-- A deal a press checks rather than buys: an estimate from the scan, or gear
+-- whose latest search isn't its own (gear is bought by auction ID, as
+-- Blizzard's Buy page does, from the item's latest search).
+function N:NeedsCheck(d)
+    if not d then return false end
+    if not d.verified and not d.direct then return true end
+    return d.kind == "item" and self.lastSearch ~= d.id
+end
+
+-- After your own sniper purchase, check that item again so the next press
+-- can buy: it follows from your press, not background searching.
+function N:CheckAfter(id)
+    self.priority = id
+    if self.after then self.after(0, "snipe-next-check", function() N:Pump() end) end
 end
 
 ---------------------------------------------------------------------------
@@ -412,7 +418,9 @@ function N:Next()
     if self.purchase then return self.byID[self.purchase.id], "Waiting for the last purchase." end
     local d = self:Head()
     if not d then return nil, "No deals. Scan the auction house." end
-    if not d.verified and not d.direct then return d, "Checking the listings." end
+    if self:NeedsCheck(d) then
+        return d, self.checking == d.id and "Checking the listings." or "Press to check the listings first."
+    end
     return d
 end
 
@@ -420,8 +428,8 @@ function N:BuyNext()
     if self.purchase and clock() - self.purchase.time > PURCHASE_TIMEOUT then self.purchase = nil end
     local d, why = self:Next()
     if not d or why then
-        -- Pressing on a deal still being checked moves it to the front.
-        if d and not d.verified and not d.direct then
+        -- Pressing on a deal that needs checking searches it.
+        if d and self:NeedsCheck(d) then
             self.priority = d.id
             if not self.checking then self:Pump() end
         end
@@ -453,7 +461,7 @@ end
 -- Buy under your price (the Profits page; call BuyUnder from a click only)
 ---------------------------------------------------------------------------
 -- A price you set for one trade good, kept for this session. One press buys
--- units at or under it that you can afford (see M.BuyShare for how many),
+-- units at or under it that you can afford (see M.UnderShare for how many),
 -- through the same purchase as the sniper's, so only one of them buys at a
 -- time.
 function N:SetLimit(id, copper)
@@ -461,6 +469,7 @@ function N:SetLimit(id, copper)
     self.limits[id] = num(copper) and copper > 0 and math.floor(copper) or nil
     self.misses[id] = nil
     notify()
+    self:Kick()
 end
 
 function N:Limit(id) return self.limits[id] end
@@ -479,14 +488,13 @@ function N:UnderLimit(id)
     -- After a press, the book is our best guess until it's read again: the
     -- quote is the check, so the next press needn't wait for the search.
     if live.stale and not live.adjusted then return nil, "Scan again for the listings now." end
-    local all = M.BuyUnder(live.levels, limit, money())
-    if not all then
+    local misses = self.misses[id] or 0
+    local buy = M.UnderShare(live.levels, limit, money(), misses)
+    if not buy then
         if M.BuyUnder(live.levels, limit) then return nil, "Not enough gold for one." end
         return nil, "None at " .. M.MoneyText(limit) .. " or less."
     end
-    local misses = self.misses[id] or 0
-    local buy = M.BuyUnder(live.levels, limit, money(), M.BuyShare(all.qty, misses))
-    buy.of, buy.misses, buy.guess = all.qty, misses, live.adjusted == true
+    buy.misses, buy.guess = misses, live.adjusted == true
     return buy
 end
 
@@ -505,24 +513,50 @@ function N:BuyUnder(id)
     return true
 end
 
--- After a buy under your price, read the listings again so the button shows
--- what's left. A search needs no click, but it uses the AH throttle, and the
--- next press doesn't need it (it goes from what's left as far as we know),
--- so the search waits until you've paused, and never runs mid-purchase.
+-- The item you're watching: the one on the Profits page, while it's shown at
+-- the AH with your price set. Core sets watchTarget to say which is shown.
+function N:Watched()
+    local id = self.watchTarget and self.watchTarget()
+    if not id or not self.limits[id] or not P.ahOpen then return nil end
+    if self:KindOf(id) == "item" or (self.live[id] and self.live[id].kind == "item") then return nil end
+    return id
+end
+
+-- Search the watched item again (or, after a buy under your price, the item
+-- bought) once the AH allows. Searches need no click, but they use the AH
+-- throttle, and a press queued behind a search reaches the server later. So
+-- each search waits WATCH_GAP after the last one's answer, a moment after a
+-- purchase (your next press doesn't need the search: it goes from what's left
+-- as far as we know), and never runs mid-purchase or mid-check.
 function N:Rescan()
-    local id = self.rescan
-    if not id or not P.ahOpen or self.purchase then return end
-    local wait = (self.quietUntil or 0) - clock()
+    local id = self.rescan or self:Watched()
+    if not id or not P.ahOpen or self.purchase or self.checking or P.queue then return end
+    local wait = math.max(self.quietUntil or 0, self.watchNext or 0) - clock()
     if wait > 0 then
         if self.after then self.after(wait, "snipe-rescan", function() N:Rescan() end) end
         return
     end
-    if P:Scan(id) then self.rescan = nil end
+    -- One search at a time: its answer schedules the next.
+    if P.pending and clock() - P.pending.time < SEARCH_TIMEOUT then
+        if self.after then self.after(P.pending.time + SEARCH_TIMEOUT - clock(), "snipe-rescan", function() N:Rescan() end) end
+        return
+    end
+    if not P:CanScan() then return end -- AUCTION_HOUSE_THROTTLED_SYSTEM_READY tries again
+    if P:Scan(id) then
+        self.rescan, self.watchNext = nil, clock() + SEARCH_TIMEOUT -- until it answers
+    end
 end
 
 function N:RescanSoon(id)
     self.rescan, self.quietUntil = id, clock() + RESCAN_QUIET
     self:Rescan()
+end
+
+-- Something changed what's watched (an item picked, a price set, the page
+-- shown): look again on the next frame.
+function N:Kick()
+    self.watchNext = nil
+    if self.after then self.after(0, "snipe-rescan", function() N:Rescan() end) end
 end
 
 local function confirm(p)
@@ -561,7 +595,7 @@ end
 function N:OnThrottleReady()
     local p = self.purchase
     if p and p.stage == "ready" then confirm(p); return end
-    if self.rescan then self:Rescan(); return end
+    self:Rescan()
     if self.after then self.after(0, "snipe-next-check", function() N:Pump() end) end
 end
 
@@ -605,6 +639,8 @@ function N:Bought()
     if p.under then
         self.misses[p.id] = nil
         self:RescanSoon(p.id)
+    elseif p.kind == "commodity" then
+        self:CheckAfter(p.id)
     end
     self:Evaluate(p.id)
 end
@@ -623,6 +659,8 @@ function N:Failed(message)
         self.misses[p.id] = (self.misses[p.id] or 0) + 1
         if live then live.adjusted = true end
         self:RescanSoon(p.id)
+    else
+        self:CheckAfter(p.id)
     end
     self:Evaluate(p.id)
 end
@@ -794,8 +832,9 @@ function N:Attach(app, scope)
         local d = id and N.byID[id]
         if d and d.scan and not d.direct and not N.kinds[id] and N:KindOf(id) == "commodity" then N:Evaluate(id) end
     end)
+    on("AUCTION_HOUSE_SHOW", function() N:Kick() end)
     on("AUCTION_HOUSE_CLOSED", function()
-        N.purchase, N.full, N.checking, N.rescan, N.misses = nil, nil, nil, nil, {}
+        N.purchase, N.full, N.checking, N.rescan, N.misses, N.watchNext = nil, nil, nil, nil, {}, nil
         -- Commodity books move while you're away; check again on return.
         for _, live in pairs(N.live) do
             if live.kind == "commodity" then live.stale, live.adjusted = true, nil end

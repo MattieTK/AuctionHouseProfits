@@ -5,4 +5,7 @@
 	<Binding name="AUCTIONHOUSEPROFITS_SNIPE_SKIP" category="ADDONS">
 		AuctionHouseProfits_SnipeSkip()
 	</Binding>
+	<Binding name="AUCTIONHOUSEPROFITS_BUY_UNDER" category="ADDONS">
+		AuctionHouseProfits_BuyUnder()
+	</Binding>
 </Bindings>

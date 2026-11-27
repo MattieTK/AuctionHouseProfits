@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0
+
+Built for hunting one trade good under your price.
+
+- **One key to buy or search.** Bind "Profits page: buy under your price, or search again" (Key Bindings → AddOns → Auction House Profits). If units at your price are showing, it buys; if not, it searches the item again. Sit on one key: no mouse travel.
+- **The item is watched.** While the Profits page is open at the auction house with your price set for a trade good, the add-on searches it again a moment after each answer, with no click, so the Buy button is ready as soon as cheap units are listed. It never searches during a purchase, waits a moment after a buy so your next press goes first, and stops when you leave the page or close the AH.
+- **Each press asks for as much as will survive others buying first.** It asks for as many as would still come within your price if others bought half the cheap units before you: never less than half, and more when they're well under your price, since each of those leaves budget for a dearer unit. At 2s with 15 listed at 1s and the next at 3s, that's all 15 rather than 8. Up to 5 it still takes them all, and each miss in a row halves it again.
+- **The sniper no longer searches in the background,** so the auction house is left to the item you're watching. Deals that need checking (estimates from the full scan, and gear whose latest search isn't its own) say **Check listings**: the first press searches the item, the second buys. After your own sniper buy or miss, that item is checked again so your next press can buy. Trade goods straight from the full scan still buy in one press.
+
 ## 0.4.9
 
 - **Fixed: a buy could hang on "Buying..." for 10 seconds.** The game doesn't hold units while it quotes you: if some are bought before your confirm reaches it, it quotes the new total and waits for another confirm (Blizzard's buy dialog shows "price updated"). The add-on ignored that second quote, so the purchase sat until it timed out. Now it confirms again if the new total is still within your price, and cancels if not. This applies to the sniper too.

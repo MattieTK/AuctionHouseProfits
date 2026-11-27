@@ -636,19 +636,44 @@ function M.BuyUnder(levels, limit, money, most)
     return { qty = qty, cost = cost, maxPrice = top }
 end
 
--- How many of n cheap units to ask for in one purchase. Others are after the
--- same units, and the server fills a purchase from the cheapest left: ask for
--- all of them and if anyone beats you to some, the rest come from dearer
--- listings and the whole purchase is cancelled. So up to BUY_ALL_UPTO, all of
--- them; past that, half (never fewer than BUY_ALL_UPTO). Each miss in a row
--- halves it again, down to one.
+-- What one press asks for, of the units at or under limit each you can
+-- afford (c of them). Others are after the same units and the server fills a
+-- purchase from the cheapest left; if anyone beats you to some, the rest come
+-- from dearer listings, and if the total goes over qty x limit the whole
+-- purchase is cancelled. So ask for as many as would still go through if
+-- others bought half of the c first: at least half, and more when they're
+-- well under your price, since each of those leaves budget for a dearer
+-- unit. Up to BUY_ALL_UPTO, all of them. Each miss in a row halves it again,
+-- down to one. Returns BuyUnder's { qty, cost, maxPrice } for the order plus
+-- of = c, or nil if there's nothing at or under limit you can afford.
 M.BUY_ALL_UPTO = 5
-function M.BuyShare(n, misses)
-    n = M.Number(n) and floor(n) or 0
-    if n <= 0 then return 0 end
-    local q = n <= M.BUY_ALL_UPTO and n or max(M.BUY_ALL_UPTO, math.ceil(n / 2))
+function M.UnderShare(levels, limit, money, misses)
+    local all = M.BuyUnder(levels, limit, money)
+    if not all then return nil end
+    local c, q = all.qty, all.qty
+    if c > M.BUY_ALL_UPTO then
+        -- Skip the half others may take, then count what fills the order
+        -- within budget (and your gold), dearer units included.
+        local skip, qty, cost = floor(c / 2), 0, 0
+        for _, l in ipairs(levels) do
+            local n = M.Number(l.price) and max(0, (l.qty or 0) - (l.mine or 0)) or 0
+            local s = min(skip, n)
+            skip, n = skip - s, n - s
+            if n > 0 then
+                local take = min(n, c - qty)
+                if l.price > limit then take = min(take, floor((qty * limit - cost) / (l.price - limit))) end
+                if M.Number(money) and l.price > 0 then take = min(take, floor((money - cost) / l.price)) end
+                take = max(0, take)
+                qty, cost = qty + take, cost + take * l.price
+                if take < n or qty >= c then break end
+            end
+        end
+        q = max(M.BUY_ALL_UPTO, qty)
+    end
     for _ = 1, M.Number(misses) and misses or 0 do q = math.ceil(q / 2) end
-    return max(1, min(n, q))
+    local buy = M.BuyUnder(levels, limit, money, max(1, min(c, q)))
+    buy.of = c
+    return buy
 end
 
 -- levels with the qty cheapest units (not your own) taken out: the book

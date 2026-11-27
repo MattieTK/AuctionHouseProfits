@@ -15,8 +15,10 @@ local function count(n) return BreakUpLargeNumbers and BreakUpLargeNumbers(n) or
 BINDING_HEADER_AUCTIONHOUSEPROFITS = "Auction House Profits"
 BINDING_NAME_AUCTIONHOUSEPROFITS_SNIPE_BUY = "Vendor sniper: buy the next deal"
 BINDING_NAME_AUCTIONHOUSEPROFITS_SNIPE_SKIP = "Vendor sniper: skip the next deal"
+BINDING_NAME_AUCTIONHOUSEPROFITS_BUY_UNDER = "Profits page: buy under your price, or search again"
 function AuctionHouseProfits_SnipeBuy() V:Buy() end
 function AuctionHouseProfits_SnipeSkip() V:Skip() end
+function AuctionHouseProfits_BuyUnder() U:BuyOrScan() end
 
 local function tip(frame, fn)
     frame:SetScript("OnEnter", function(self)
@@ -61,7 +63,7 @@ end
 -- What one press buys from a checked deal, or a trade good straight from
 -- the full scan: units, cost, profit.
 local function press(d)
-    if not d or not (d.verified or d.direct) or not d.buy then return nil end
+    if not d or N:NeedsCheck(d) or not d.buy then return nil end
     if d.kind == "item" then
         local a = d.buy.auctions[1]
         return 1, a.buyout, a.profit
@@ -268,7 +270,7 @@ function V:InitRow(row, d)
             elseif x.direct then
                 t:AddLine("From the full scan. One press buys it: the game quotes the price before you pay.", .3, .8, .3, true)
             else
-                t:AddLine("Estimate from the full scan; checking the live listings.", .6, .6, .6, true)
+                t:AddLine("Estimate from the full scan; press Buy to check the live listings.", .6, .6, .6, true)
             end
             t:AddLine("Click to buy this one next.", .6, .6, .6)
         end)
@@ -317,8 +319,10 @@ function V:BuyTooltip(t)
         return
     end
     if not qty then
-        t:AddLine("Checking " .. itemName(d))
-        t:AddLine("The sniper is reading this item's live listings. Pressing now buys nothing; it checks them sooner.", 1, 1, 1, true)
+        t:AddLine((N.checking == d.id and "Checking " or "Check ") .. itemName(d))
+        t:AddLine("The sniper doesn't search in the background, so the auction house is left to the item you're "
+            .. "watching on the Profits page. This press reads this item's live listings; it buys nothing. "
+            .. "Press again to buy.", 1, 1, 1, true)
         return
     end
     t:AddLine("Buy " .. count(qty) .. " " .. itemName(d) .. " for " .. U.Money(cost))
@@ -465,7 +469,7 @@ function V:Refresh()
             self.nextDetail:SetText(each .. color(MUTED, " · vendor pays ") .. U.Money(cost + gain)
                 .. color(MUTED, " · ") .. U.Money(gain, true, true))
         else
-            self.nextDetail:SetText(color(MUTED, "About " .. U.Money(d.profit, true) .. " in all. Checking the live listings first."))
+            self.nextDetail:SetText(color(MUTED, "About " .. U.Money(d.profit, true) .. " in all. Press Buy to check the live listings first."))
         end
     else
         self.nextIcon:Hide()
@@ -475,7 +479,7 @@ function V:Refresh()
     local text
     if N:IsBusy() then text = "Buying..."
     elseif not d then text = "No deals"
-    elseif not qty then text = "Checking listings..."
+    elseif not qty then text = N.checking == d.id and "Checking listings..." or "Check listings"
     else text = "Buy " .. count(qty) .. " for " .. (d.verified and "" or "~") .. U.Money(cost) end
     self.buyButton:SetText(text)
     self.buyButton:SetEnabled(P.ahOpen and d ~= nil and not N:IsBusy())

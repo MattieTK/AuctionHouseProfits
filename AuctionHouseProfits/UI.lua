@@ -975,6 +975,7 @@ function U:Select(id)
     self.selected = id
     self:RefreshDetail()
     self:DrawRows() -- moves the highlight; nothing in the list changed
+    ns.Snipe:Kick() -- the item watched (with your price set) follows the page
     if id and P.ahOpen and self.app:Get("autoScan") then
         local scan = D:Scan(id)
         local stale = not scan or (time() - scan.time) > self.app:Get("scanFreshMinutes") * 60
@@ -996,7 +997,18 @@ function U:ScanSelected(quiet)
     self:RefreshDetail()
 end
 
--- Buy every unit at or under your price that you can afford (a click only).
+-- One key for hunting: buy under your price if there's something to buy,
+-- otherwise search the item again (unless a search is already on its way).
+-- From a key binding or click only: starting a purchase needs one.
+function U:BuyOrScan()
+    if not self:IsShown() or not self.selected then return end
+    local N = ns.Snipe
+    if N:IsBusy() then return end
+    if N:UnderLimit(self.selected) then return self:BuyUnder() end
+    if not P.pending then self:ScanSelected(true) end
+end
+
+-- Buy under your price: a share of the units at or under it (a click only).
 function U:BuyUnder()
     if not self.selected then return end
     local ok, why = ns.Snipe:BuyUnder(self.selected)
@@ -1064,8 +1076,12 @@ function U:BuyTooltip(owner)
         GameTooltip:AddLine(why or "Nothing to buy.", 1, 1, 1, true)
     end
     GameTooltip:AddLine(string.format("Others buy the same cheap units. Ask for all of them and if anyone beats you to some, "
-        .. "the rest come from dearer listings and it's cancelled. So one press takes up to %d, or half when there are more, "
-        .. "and half again after each miss. Press again for the rest.", M.BUY_ALL_UPTO), .62, .6, .56, true)
+        .. "the rest come from dearer listings and, over your price, it's cancelled. So one press takes all of up to %d; "
+        .. "past that, as many as would still go through if others bought half first, and half that after each miss. "
+        .. "Press again for the rest.", M.BUY_ALL_UPTO), .62, .6, .56, true)
+    GameTooltip:AddLine("With your price set, this item is searched again every moment while this page is open.",
+        .62, .6, .56, true)
+    GameTooltip:AddLine("Bind one key to buy or search: Key Bindings > AddOns > Auction House Profits.", .62, .6, .56, true)
     GameTooltip:Show()
 end
 

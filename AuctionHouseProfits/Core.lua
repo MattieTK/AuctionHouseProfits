@@ -1,7 +1,7 @@
 local ADDON, ns = ...
 local M, D, P, R, U, T = ns.Model, ns.Data, ns.Prices, ns.Merchant, ns.UI, ns.AuctionTab
 local S, B, N, SP = ns.Post, ns.AuctionsBar, ns.Snipe, ns.SnipePanel
-local VERSION = "0.4.9"
+local VERSION = "0.5.0"
 
 -- WoW Forever only (interface 16001). Other clients have different AH rules.
 local interface = select(4, GetBuildInfo())
@@ -56,10 +56,13 @@ U.onShown = function()
     U:Invalidate() -- anything may have changed while it was hidden
     view:Watch(state:Select(function(s) return s.revision end), function() U:Refresh() end)
     view:Watch(app:SelectSettings(function(values) return values end), function() U:Invalidate(); U:Refresh() end)
+    N:Kick()
 end
 U.onHidden = function()
     if view then view:Cancel(); view = nil end
 end
+-- The Profits page's item is the one the sniper watches (when you've set a price).
+N.watchTarget = function() return U:IsShown() and U.selected or nil end
 
 -- Item info arrives asynchronously; fill in names, icons and calibration.
 local waiting = {}

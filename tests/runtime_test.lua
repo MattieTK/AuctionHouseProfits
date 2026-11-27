@@ -734,22 +734,27 @@ test("the sniper sits beside the auction house and shows when it opens", functio
     assert(xml:find("AUCTIONHOUSEPROFITS_SNIPE_BUY") and xml:find("AuctionHouseProfits_SnipeBuy%(%)"), "key binding declared")
 end)
 
-test("a full scan lists deals as it's read, checking the best gear first", function()
+test("a full scan lists deals as it's read; gear is checked when you press", function()
     local chat = #DEFAULT_CHAT_FRAME.lines
     SV.scanButton:GetScript("OnClick")(SV.scanButton); settle()
     assert(replicate.asked == 1 and SN.full and SV.scanButton:GetText() == "Scanning...")
+    local before = #searches
     W.event("REPLICATE_ITEM_LIST_UPDATE")
-    -- The first 500 auctions are read; the shield is checked before the rest.
-    assert(SN.full and SN.full.stage == "reading" and SN.checking == 9998 and searches[#searches] == 9998,
-        "gear deals are checked while the scan is still being read")
+    assert(SN.full and SN.full.stage == "reading")
+    settle()
+    assert(not SN.full and SN.snapshot.total == #replicate, "listed without waiting for vendor prices")
+    assert(#searches == before and not SN.checking, "the sniper doesn't search in the background")
+    -- Pressing on the shield (an estimate) checks it, and buys nothing.
+    SN:Focus(9998); settle()
+    assert(SN:Head().id == 9998 and SV.buyButton:GetText() == "Check listings", SV.buyButton:GetText())
+    press()
+    assert(SN.checking == 9998 and searches[#searches] == 9998 and #bids == 0, "a press checks it")
     itemResults[9998] = {} -- someone bought it
-    W.event("ITEM_SEARCH_RESULTS_UPDATED", { itemID = 9998 })
+    W.event("ITEM_SEARCH_RESULTS_UPDATED", { itemID = 9998 }); settle()
     local said = DEFAULT_CHAT_FRAME.lines[chat + 1]
     assert(said and said:find("Old Shield was gone when checked") and said:find("scan saw C100 each")
         and said:find("none are listed now"), said)
-    settle()
-    assert(not SN.full and SN.snapshot.total == #replicate, "listed without waiting for vendor prices")
-    assert(not SN.byID[9998], "a check during the read outranks the scan")
+    assert(not SN.byID[9998], "the check outranks the scan")
     local cloth = SN.byID[14047]
     assert(cloth.direct and not cloth.verified and cloth.qty == 10 and cloth.cost == 2000 and cloth.profit == 2000)
     assert(cloth.stack == 20 and cloth.perSlot == 2000, "10 Runecloth fill one slot")
@@ -767,7 +772,7 @@ test("a full scan lists deals as it's read, checking the best gear first", funct
 end)
 
 test("trade goods are bought straight from the scan; gear is checked first", function()
-    assert(SN.checking == 9999 and searches[#searches] == 9999, "gear is searched for its auction IDs")
+    assert(not SN.checking, "the sword isn't searched until you press on it")
     local n14047 = 0
     for _, id in ipairs(searches) do if id == 14047 then n14047 = n14047 + 1 end end
     -- The press needs no search: the server quotes the price before we confirm.
@@ -780,7 +785,7 @@ test("trade goods are bought straight from the scan; gear is checked first", fun
         { auctionID = 72, quantity = 1, buyoutAmount = 120, containsOwnerItem = false },
         { auctionID = 73, quantity = 1, buyoutAmount = 290, containsOwnerItem = false },
     }
-    W.event("ITEM_SEARCH_RESULTS_UPDATED", { itemID = 9999 }); settle()
+    W.event("ITEM_SEARCH_RESULTS_UPDATED", { itemID = 9999 }); settle() -- e.g. you searched it on the Buy page
     local sword = SN.byID[9999]
     assert(sword.verified and sword.kind == "item" and #sword.buy.auctions == 2 and sword.buy.auctions[1].auctionID == 72)
     local m = 0
@@ -823,7 +828,7 @@ test("one press buys every profitable unit of a trade good, confirmed at the ser
     assert(not SN:IsBusy() and SN.session.units == 10 and SN.session.spent == 2360 and SN.session.value == 4000)
     assert(SV.session:GetText():find("10 bought"))
     assert(not SN.byID[14047] or not (SN.byID[14047].verified or SN.byID[14047].direct), "re-read before buying more")
-    if SN.checking ~= 14047 then settle() end
+    assert(SN.checking == 14047, "your buy's item is checked again")
     W.event("COMMODITY_SEARCH_RESULTS_UPDATED", 14047); settle()
     assert(not SN.byID[14047], "nothing left under vendor price")
     assert(#DEFAULT_CHAT_FRAME.lines == chat, "not reported as gone: we bought it")
@@ -831,7 +836,10 @@ end)
 
 test("one press buys one auction, the most profitable first", function()
     assert(SN:Head().id == 9999)
-    assert(searches[#searches] == 9999, "the top gear deal's search is kept the latest")
+    -- The last search was Runecloth's: gear is bought by auction ID from its own latest search.
+    assert(SV.buyButton:GetText() == "Check listings", SV.buyButton:GetText())
+    press()
+    assert(#bids == 0 and searches[#searches] == 9999, "first press: search it")
     W.event("ITEM_SEARCH_RESULTS_UPDATED", { itemID = 9999 }); settle()
     press()
     assert(bids[1].auctionID == 72 and bids[1].amount == 120)
@@ -841,7 +849,7 @@ test("one press buys one auction, the most profitable first", function()
     assert(bids[2].auctionID == 71)
     W.event("AUCTION_HOUSE_SHOW_ERROR", 1); settle() -- someone else got it
     assert(not SN:IsBusy() and SN.session.buys == 2, "a failed buy costs nothing")
-    assert(not SN.byID[9999].verified, "checks the listings again")
+    assert(not SN.byID[9999].verified and SN.checking == 9999, "checks the listings again")
     itemResults[9999] = {}
     W.event("ITEM_SEARCH_RESULTS_UPDATED", { itemID = 9999 }); settle()
     assert(#SN:Deals() == 0 and SV.buyButton:GetText() == "No deals")
@@ -913,7 +921,6 @@ test("a scan price that's gone is cancelled, and the next press waits for a chec
     assert(purchases[before + 1].start == 14047 and purchases[before + 2].cancel and not purchases[before + 3])
     local d = SN.byID[14047]
     assert(d and not d.direct and not d.verified and SV.buyButton:GetText() == "Checking listings...")
-    if SN.checking ~= 14047 then settle() end
     assert(SN.checking == 14047, "checked straight away")
     W.event("COMMODITY_SEARCH_RESULTS_UPDATED", 14047); settle()
     assert(SN.byID[14047].verified)
@@ -1071,16 +1078,25 @@ test("sort by profit per bag slot puts stackable deals first", function()
     SN:Sort()
 end)
 
-test("Buy under your price: one press buys a share of the units at or under it you can afford", function()
+test("Buy under your price: watched, one key, a share that survives others buying first", function()
     W.event("AUCTION_HOUSE_SHOW"); ah:Show(); settle()
     AuctionHouseProfitsAHTab:GetScript("OnClick")(AuctionHouseProfitsAHTab); settle()
     local U = ns.UI
     assert(U:IsShown() and U.host == "ah")
+    assert(type(AuctionHouseProfits_BuyUnder) == "function" and BINDING_NAME_AUCTIONHOUSEPROFITS_BUY_UNDER)
+    local xml = io.open("AuctionHouseProfits/Bindings.xml"):read("*a")
+    assert(xml:find("AuctionHouseProfits_BuyUnder%(%)"), "key binding declared")
+    local function key() AuctionHouseProfits_BuyUnder(); settle() end
+    local function answer() W.event("COMMODITY_SEARCH_RESULTS_UPDATED", 14047); W.tick(0.1) end
     U:Select(9999); settle()
     SN:SetLimit(9999, 200); settle()
     assert(U.buyButton.label:GetText() == "Trade goods only" and not U.buyButton:IsEnabled())
-    U:Select(14047); settle()
+    local scans = #searches
+    settle(); settle()
+    assert(#searches == scans, "gear isn't watched")
+    U:Select(14047); settle(); settle()
     assert(U.buyButton.label:GetText() == "Set a price" and not U.buyButton:IsEnabled())
+    assert(#searches == scans, "nothing is watched without your price")
     commodity[14047] = {
         { unitPrice = 300, quantity = 25, numOwnerItems = 0, totalNumberOfOwners = 1, owners = { "Ann" } },
         { unitPrice = 350, quantity = 30, numOwnerItems = 5, totalNumberOfOwners = 2, owners = { "Cy" } }, -- 5 are yours
@@ -1088,66 +1104,90 @@ test("Buy under your price: one press buys a share of the units at or under it y
     }
     local boxes = U.limitInput.boxes
     boxes[2]:SetText("3"); boxes[3]:SetText("50")
-    boxes[3]:GetScript("OnEnterPressed")(boxes[3]); settle()
+    boxes[3]:GetScript("OnEnterPressed")(boxes[3]); W.tick(0.1)
     assert(SN:Limit(14047) == 350, "3s 50c each")
-    U.scanButton:GetScript("OnClick")(U.scanButton); settle()
-    W.event("COMMODITY_SEARCH_RESULTS_UPDATED", 14047); settle()
+    -- Watched from here: searched again a moment after each answer, without a press.
+    assert(#searches == scans + 1 and searches[#searches] == 14047, "searched as soon as your price is set")
+    W.tick(0.1); W.tick(0.1)
+    assert(#searches == scans + 1, "one search at a time")
+    answer()
+    assert(U.buyButton.label:GetText() == "Buy 25 for C7500", "half of the 50 just under your price: " .. U.buyButton.label:GetText())
+    W.tick(0.1); W.tick(0.1)
+    assert(#searches == scans + 1, "a gap after each answer")
+    settle()
+    assert(#searches == scans + 2 and searches[#searches] == 14047, "then searched again")
+    answer()
     local saved, before, units = wallet, #purchases, SN.session.units
-    assert(U.buyButton.label:GetText() == "Buy 25 for C7500", "half of the 50 at your price: " .. U.buyButton.label:GetText())
-    wallet = 12000 -- 25 at 3s, then 12 more at 3s 50c: 37, so 19
-    W.event("PLAYER_MONEY"); settle()
-    assert(U.buyButton.label:GetText() == "Buy 19 for C5700" and U.buyButton:IsEnabled(), U.buyButton.label:GetText())
-    U.buyButton:GetScript("OnClick")(U.buyButton); settle()
-    assert(#purchases == before + 1 and purchases[#purchases].start == 14047 and purchases[#purchases].qty == 19,
-        "one press, no quantity to pick")
+    wallet = 12000 -- 37 at your price you can afford; 35 still go through if others take 18 first
+    W.event("PLAYER_MONEY"); W.tick(0.1)
+    assert(U.buyButton.label:GetText() == "Buy 35 for C11000" and U.buyButton:IsEnabled(), U.buyButton.label:GetText())
+    key()
+    assert(#purchases == before + 1 and purchases[#purchases].start == 14047 and purchases[#purchases].qty == 35,
+        "one key, no quantity to pick")
     assert(U.buyButton.label:GetText() == "Buying..." and not U.buyButton:IsEnabled())
-    W.event("COMMODITY_PRICE_UPDATED", 300, 5700); settle()
-    assert(purchases[#purchases].confirm == 14047 and purchases[#purchases].qty == 19, "confirmed at the quoted total")
+    scans = #searches
+    settle(); settle()
+    assert(#searches == scans, "no search mid-purchase")
+    W.event("COMMODITY_PRICE_UPDATED", 314, 11000); W.tick(0.1)
+    assert(purchases[#purchases].confirm == 14047 and purchases[#purchases].qty == 35, "confirmed at the quoted total")
     -- Some went before the confirm reached the server: it quotes again rather than charging more.
-    W.event("COMMODITY_PRICE_UPDATED", 310, 5900); settle()
-    assert(#purchases == before + 3 and purchases[#purchases].confirm == 14047, "still under 19 x 3s 50c: confirmed again")
+    W.event("COMMODITY_PRICE_UPDATED", 320, 11200); W.tick(0.1)
+    assert(#purchases == before + 3 and purchases[#purchases].confirm == 14047, "still under 35 x 3s 50c: confirmed again")
     commodity[14047] = { { unitPrice = 360, quantity = 50, numOwnerItems = 0, totalNumberOfOwners = 1, owners = { "Bob" } } }
-    local scans = #searches
     W.event("COMMODITY_PURCHASE_SUCCEEDED"); W.tick(0.1)
     assert(not SN:IsBusy() and #searches == scans, "the next press gets the AH first, not a search")
     assert(SN.session.units == units, "not counted as a vendor flip")
-    -- Until the search answers, the next press goes from what's left: 6 at 3s and 25 at 3s 50c, so 16.
-    assert(U.buyButton.label:GetText() == "Buy 16 for ~C5300" and U.buyButton:IsEnabled(), U.buyButton.label:GetText())
+    -- Until the search answers, the next press goes from what's left: 15 at 3s 50c, so 8.
+    assert(U.buyButton.label:GetText() == "Buy 8 for ~C2800" and U.buyButton:IsEnabled(), U.buyButton.label:GetText())
     settle(); settle()
     assert(#searches == scans + 1 and searches[#searches] == 14047, "listings re-read once you pause")
-    W.event("COMMODITY_SEARCH_RESULTS_UPDATED", 14047); settle()
+    answer()
     assert(U.buyButton.label:GetText() == "None that cheap" and not U.buyButton:IsEnabled())
+    -- With nothing to buy, the same key searches again.
+    scans = #searches
+    AuctionHouseProfits_BuyUnder()
+    assert(#searches == scans + 1 and #purchases == before + 3, "the key searched, and bought nothing")
+    AuctionHouseProfits_BuyUnder()
+    assert(#searches == scans + 1, "not while that search is on its way")
     -- Someone bought the cheap units first: the server's total is over your price, so it's cancelled,
     -- and the next press asks for fewer, without waiting for the search.
     wallet = saved
     commodity[14047] = { { unitPrice = 340, quantity = 10, numOwnerItems = 0, totalNumberOfOwners = 1, owners = { "Di" } } }
-    U.scanButton:GetScript("OnClick")(U.scanButton); settle()
-    W.event("COMMODITY_SEARCH_RESULTS_UPDATED", 14047); settle()
-    assert(U.buyButton.label:GetText() == "Buy 5 for C1700", "half of 10: " .. U.buyButton.label:GetText())
-    U.buyButton:GetScript("OnClick")(U.buyButton); settle()
+    answer()
+    assert(U.buyButton.label:GetText() == "Buy 5 for C1700", "nothing dearer to fill from: half of 10: " .. U.buyButton.label:GetText())
+    key()
     assert(purchases[#purchases].start == 14047 and purchases[#purchases].qty == 5)
-    scans = #searches
-    W.event("COMMODITY_PRICE_UPDATED", 360, 1800); settle()
+    W.event("COMMODITY_PRICE_UPDATED", 360, 1800); W.tick(0.1)
     assert(purchases[#purchases].cancel and not SN:IsBusy(), "over 5 x 3s 50c: cancelled")
     assert(UIErrorsFrame.lines[#UIErrorsFrame.lines]:find("^Someone was quicker"), UIErrorsFrame.lines[#UIErrorsFrame.lines])
     assert(U.buyButton.label:GetText() == "Buy 3 for ~C1020" and U.buyButton:IsEnabled(), U.buyButton.label:GetText())
-    U.buyButton:GetScript("OnClick")(U.buyButton); settle()
+    key()
     assert(purchases[#purchases].start == 14047 and purchases[#purchases].qty == 3, "tried again at once, for fewer")
-    settle(); settle()
-    assert(#searches == scans, "no search mid-purchase")
-    W.event("COMMODITY_PRICE_UPDATED", 340, 1020); settle()
+    W.event("COMMODITY_PRICE_UPDATED", 340, 1020); W.tick(0.1)
     W.event("COMMODITY_PURCHASE_SUCCEEDED"); W.tick(0.1)
     assert((SN.misses[14047] or 0) == 0, "a buy that goes through resets the misses")
     assert(U.buyButton.label:GetText() == "Buy 5 for ~C1700", U.buyButton.label:GetText())
     -- Re-quoted over your price after the confirm: cancelled.
-    U.buyButton:GetScript("OnClick")(U.buyButton); settle()
-    W.event("COMMODITY_PRICE_UPDATED", 340, 1700); settle()
-    W.event("COMMODITY_PRICE_UPDATED", 400, 2000); settle()
+    key()
+    W.event("COMMODITY_PRICE_UPDATED", 340, 1700); W.tick(0.1)
+    W.event("COMMODITY_PRICE_UPDATED", 400, 2000); W.tick(0.1)
     assert(purchases[#purchases].cancel and not SN:IsBusy() and SN.misses[14047] == 1)
     settle(); settle()
-    assert(#searches == scans + 1 and searches[#searches] == 14047, "read again once you pause")
-    SN:SetLimit(14047, nil); SN:SetLimit(9999, nil)
+    answer()
+    -- A sniper check you pressed for goes first; the watch carries on after its answer.
+    SN.checking, SN.checkStarted = 9999, GetTime()
+    scans = #searches
+    settle(); settle()
+    assert(#searches == scans, "the watch waits for the check")
+    W.event("ITEM_SEARCH_RESULTS_UPDATED", { itemID = 9999 }); settle()
+    assert(not SN.checking and #searches == scans + 1 and searches[#searches] == 14047, "and resumes after it")
+    answer()
+    -- Leaving the auction house stops the watch.
     W.event("AUCTION_HOUSE_CLOSED"); ah:Hide(); settle()
+    scans = #searches
+    settle(); settle(); settle()
+    assert(#searches == scans, "not watched once the AH is closed")
+    SN:SetLimit(14047, nil); SN:SetLimit(9999, nil)
 end)
 
 test("settings changes redraw an open view", function()
